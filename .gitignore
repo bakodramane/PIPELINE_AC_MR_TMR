@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dist-ssr/
+*.local
+build/
+
+# Tauri build artefacts
+src-tauri/target/
+src-tauri/gen/
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.claude/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# TypeScript
+*.tsbuildinfo
+
+# Country project data — projects live under ~/Documents/AgCensus per DESIGN §4,
+# but ignore any that get dropped into the repo by accident.
+/AgCensus/
+country-projects/
+
+# Test coverage
+coverage/
+.nyc_output/
