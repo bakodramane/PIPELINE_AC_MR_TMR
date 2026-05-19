@@ -56,3 +56,25 @@ as the canonical prompt — open both and compare sections 1–3.
 AUDIT TRAIL: generation_completed events now writing to audit log
 with real token counts and cost. Check audit/ after each test run.
 
+## Session 6 notes
+
+PAKISTAN SECTION 1 QUALITY GAP: Generator cited 1972 as first
+Pakistan census; correct answer is 1960. Root cause: evidence
+retrieval did not surface the page containing the 1960 reference.
+Fix options: (1) broaden historical-outline keywords to include
+'1960', '1972', 'first census'; (2) increase maxPages for section 1
+from 20 to 30. Address in Session 10 end-to-end review.
+
+UNCITED CLAIMS: Claims with no evidence citations are split out of
+_claims.json and rendered only in current.md with a warning.
+_claims.json must contain only evidence-backed claims. This is
+enforced in mr.ts citedClaims filter.
+
+PARALLEL API CALLS: fileParallelism: false in vitest.config.ts
+prevents race conditions when multiple test files make live API
+calls. Keep this for all future API-dependent test files.
+
+SECTIONS 2-15: Instruction files written, routing implemented,
+per-section maxTokens applied (1500 for §7 and §13, 1024 others).
+End-to-end validation deferred to Session 10.
+
