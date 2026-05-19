@@ -35,3 +35,24 @@ to avoid wasting context budget on empty pages.
 PAKISTAN PDF: Place at references/pakistan-2024/sources/main-report.pdf
 before Session 6. Same path resolution pattern applies.
 
+## Session 5 notes
+
+MR generator is live. Section 1 verified against Nepal gold standard —
+all claims factually correct, zero unverified citations.
+
+SINGLE-PAGE SOURCING: Nepal section 1 drew all claims from p.18.
+Correct for this section. Watch for over-concentration on one page
+in later sections — if all claims cite the same page, evidence
+retrieval keywords may need broadening.
+
+EVIDENCE SCORER: Two-pass approach in evidence.ts — index-only first,
+then text re-score on top 2×maxPages candidates. Keep this pattern
+for all subsequent retrieveEvidence calls.
+
+MR PROMPT: references/mr-prompt-v1.3.md was converted from PDF by
+the agent. Verify the conversion is faithful before relying on it
+as the canonical prompt — open both and compare sections 1–3.
+
+AUDIT TRAIL: generation_completed events now writing to audit log
+with real token counts and cost. Check audit/ after each test run.
+
