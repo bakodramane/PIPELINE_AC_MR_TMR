@@ -374,6 +374,432 @@
         "*": "provisional",
         "c": "confidential"
       }
+    },
+    "12": {
+      "title": "Livestock system",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Holdings without livestock",
+        "Holdings with livestock",
+        "Grazing system",
+        "Mixed system",
+        "Industrial system"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Head": { "unit": "number of head", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Holdings without livestock + Holdings with livestock = Total",
+          "rows": ["Holdings without livestock", "Holdings with livestock"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "13": {
+      "title": "Livestock by type",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total holdings with livestock",
+        "Large ruminants",
+        "Cattle",
+        "Buffaloes",
+        "Yak/Zomo",
+        "Small ruminants",
+        "Sheep",
+        "Goats",
+        "Equines",
+        "Horses",
+        "Mules",
+        "Asses",
+        "Camels and camelids",
+        "Camels",
+        "Poultry",
+        "Chicken",
+        "Ducks",
+        "Geese",
+        "Turkeys",
+        "Guinea fowls",
+        "Other poultry",
+        "Other animals"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Head": { "unit": "number of head", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Cattle + Buffaloes + Yak/Zomo = Large ruminants (Head column)",
+          "rows": ["Cattle", "Buffaloes", "Yak/Zomo"],
+          "total_row": "Large ruminants"
+        },
+        {
+          "rule": "sum_to_total",
+          "description": "Sheep + Goats = Small ruminants (Head column)",
+          "rows": ["Sheep", "Goats"],
+          "total_row": "Small ruminants"
+        },
+        {
+          "rule": "sum_to_total",
+          "description": "Chicken + Ducks + Geese + Turkeys + Guinea fowls + Other poultry = Poultry (Head column)",
+          "rows": ["Chicken", "Ducks", "Geese", "Turkeys", "Guinea fowls", "Other poultry"],
+          "total_row": "Poultry"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "14": {
+      "title": "Land actually irrigated",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Holdings without irrigated land",
+        "Holdings with land actually irrigated",
+        "Fully controlled",
+        "Partially controlled"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area irrigated (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Holdings without irrigated land + Holdings with land actually irrigated = Total",
+          "rows": ["Holdings without irrigated land", "Holdings with land actually irrigated"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "15": {
+      "title": "Methods of irrigation",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Surface",
+        "Sprinkler",
+        "Localized irrigation"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area irrigated (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Surface + Sprinkler + Localized irrigation = Total",
+          "rows": ["Surface", "Sprinkler", "Localized irrigation"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "16": {
+      "title": "Irrigation by land use types",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Holdings with irrigated land",
+        "Under temporary crops",
+        "Under permanent crops",
+        "Under temporary meadows and pastures",
+        "Under permanent meadows and pastures"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area irrigated (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "17": {
+      "title": "Sources of irrigation water",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Canal only",
+        "Canal tubewell and pump",
+        "Tubewell only",
+        "Tank/bandat only",
+        "Spring/rodhoki only",
+        "Karez only",
+        "Sprinkle/drip/central pivot",
+        "Other"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area irrigated (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "All irrigation source rows sum to Total",
+          "rows": [
+            "Canal only",
+            "Canal tubewell and pump",
+            "Tubewell only",
+            "Tank/bandat only",
+            "Spring/rodhoki only",
+            "Karez only",
+            "Sprinkle/drip/central pivot",
+            "Other"
+          ],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "18": {
+      "title": "Machinery and equipment used on the holding",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total tractors of all kind",
+        "Four wheel tractors",
+        "Track-laying tractors",
+        "Combine harvesters",
+        "Ploughs (machine powered)",
+        "Other machine-powered"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Units": { "unit": "number of units", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Four wheel tractors + Track-laying tractors = Total tractors of all kind",
+          "rows": ["Four wheel tractors", "Track-laying tractors"],
+          "total_row": "Total tractors of all kind"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "19": {
+      "title": "Machinery and equipment belonging to the holding",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total tractors of all kind",
+        "Four wheel tractors",
+        "Track-laying tractors",
+        "Combine harvesters",
+        "Ploughs (machine powered)",
+        "Other machine-powered"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Units": { "unit": "number of units", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Four wheel tractors + Track-laying tractors = Total tractors of all kind",
+          "rows": ["Four wheel tractors", "Track-laying tractors"],
+          "total_row": "Total tractors of all kind"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "20": {
+      "title": "Agricultural pesticides by type",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "No use of agricultural pesticides",
+        "Use of pesticides",
+        "Insecticides",
+        "Herbicides",
+        "Fungicides",
+        "Rodenticides",
+        "Other pesticides"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "No use of agricultural pesticides + Use of pesticides = Total",
+          "rows": ["No use of agricultural pesticides", "Use of pesticides"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "21": {
+      "title": "Fertilizer by type",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "No use of fertilizers",
+        "Use of fertilizers",
+        "Mineral fertilizers",
+        "Organo-mineral fertilizers",
+        "Organic fertilizers",
+        "Biofertilizers",
+        "Manure",
+        "Other organic materials"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "No use of fertilizers + Use of fertilizers = Total",
+          "rows": ["No use of fertilizers", "Use of fertilizers"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "22": {
+      "title": "Temporary crops harvested",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Cereals",
+        "Wheat",
+        "Rice/Paddy",
+        "Maize",
+        "Vegetables and melons",
+        "Oilseed crops",
+        "Root/tuber crops",
+        "Leguminous crops",
+        "Sugar crops",
+        "Sugarcane",
+        "Other temporary crops",
+        "Cotton",
+        "Fodder crops",
+        "Other"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Wheat + Rice/Paddy + Maize + (other cereals) = Cereals — not enforced programmatically due to incomplete cereal sub-rows",
+          "rows": ["Wheat", "Rice/Paddy", "Maize"],
+          "total_row": "Cereals",
+          "tolerance": 1000
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "23": {
+      "title": "Permanent crops",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Orchards",
+        "Tropical and subtropical fruits",
+        "Citrus fruits",
+        "Berries",
+        "Pome fruits and stone fruits",
+        "Nuts",
+        "Oilseed crops",
+        "Beverage crops and spice crops",
+        "Other permanent crops",
+        "Vineyards (grapes)"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Orchards + Oilseed crops + Beverage crops and spice crops + Other permanent crops + Vineyards (grapes) = Total (approximate — not all sub-rows listed)",
+          "rows": [
+            "Orchards",
+            "Oilseed crops",
+            "Beverage crops and spice crops",
+            "Other permanent crops",
+            "Vineyards (grapes)"
+          ],
+          "total_row": "Total",
+          "tolerance": 1000
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
     }
   }
 }

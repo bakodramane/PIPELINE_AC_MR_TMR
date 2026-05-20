@@ -25,11 +25,16 @@
  * appends the audit event with parse_failed: true, and returns — never throws.
  *
  * Multi-row generation (MULTI_ROW_SUBTABLES):
- *   Sub-tables 4, 5, 7, and 9 have more than 8 rows.  Sending all rows in a
- *   single prompt causes the model to lose track of which row it is
- *   populating, leading to transposed values and hallucinations.  For these
- *   sub-tables the generator loops over spec.rows and makes one API call per
- *   row.  Results are merged into a single _cells.json entry.
+ *   Sub-tables 4, 5, 7, 9, 13, 22, and 23 have more than 8 rows.  Sending
+ *   all rows in a single prompt causes the model to lose track of which row
+ *   it is populating, leading to transposed values and hallucinations.  For
+ *   these sub-tables the generator loops over spec.rows and makes one API
+ *   call per row.  Results are merged into a single _cells.json entry.
+ *
+ *   Sub-table 13 (livestock by type) is especially prone to row-alignment
+ *   errors because the livestock type names are visually similar (Cattle /
+ *   Buffaloes / Yak) and the Head column values span many orders of
+ *   magnitude.  One-call-per-row is the only reliable defence.
  *
  * Unit conversions:
  *   - 1 acre = 0.4047 ha  (exact factor stored in ACRES_TO_HA)
@@ -163,14 +168,120 @@ export const SUBTABLE_KEYWORDS: Record<number, string[]> = {
     "labor",
     "paid worker",
   ],
+  12: [
+    "livestock system",
+    "grazing",
+    "mixed system",
+    "industrial",
+    "livestock holdings",
+  ],
+  13: [
+    "livestock",
+    "cattle",
+    "buffalo",
+    "sheep",
+    "goats",
+    "poultry",
+    "chicken",
+    "head",
+  ],
+  14: [
+    "irrigated",
+    "irrigation",
+    "irrigated land",
+    "land actually irrigated",
+    "fully controlled",
+    "partially controlled",
+  ],
+  15: [
+    "irrigation method",
+    "surface irrigation",
+    "sprinkler",
+    "localized irrigation",
+    "drip",
+  ],
+  16: [
+    "irrigation land use",
+    "irrigated crops",
+    "irrigated pastures",
+    "temporary crops irrigated",
+    "permanent crops irrigated",
+  ],
+  17: [
+    "irrigation source",
+    "canal",
+    "tubewell",
+    "pump",
+    "spring",
+    "water source",
+  ],
+  18: [
+    "machinery",
+    "tractor",
+    "combine harvester",
+    "plough",
+    "equipment used",
+    "agricultural machinery",
+  ],
+  19: [
+    "machinery owned",
+    "tractor",
+    "combine harvester",
+    "plough",
+    "equipment owned",
+    "belonging to holding",
+  ],
+  20: [
+    "pesticide",
+    "insecticide",
+    "herbicide",
+    "fungicide",
+    "rodenticide",
+    "crop protection",
+  ],
+  21: [
+    "fertilizer",
+    "mineral fertilizer",
+    "organic fertilizer",
+    "manure",
+    "biofertilizer",
+    "soil amendment",
+  ],
+  22: [
+    "temporary crops",
+    "cereals",
+    "wheat",
+    "rice",
+    "maize",
+    "vegetables",
+    "harvested area",
+  ],
+  23: [
+    "permanent crops",
+    "orchard",
+    "fruit",
+    "citrus",
+    "vineyard",
+    "beverage crops",
+    "spice crops",
+  ],
 };
 
 /**
  * Sub-tables that require one model call per row to avoid row-alignment errors.
  * These sub-tables have more than 8 rows; sending all rows in a single prompt
  * causes the model to lose track of which row it is populating.
+ *
+ * Sub-table 13 (livestock by type, 22 rows) is especially critical: the
+ * livestock names are visually similar and Head values vary by orders of
+ * magnitude, making transposition almost certain in a single-call prompt.
+ * Sub-tables 22 (temporary crops, 15 rows) and 23 (permanent crops, 11 rows)
+ * also require row-per-call discipline.
+ *
+ * Exported so the offline smoke test can assert the set is correct without
+ * making any API calls.
  */
-const MULTI_ROW_SUBTABLES = new Set([4, 5, 7, 9]);
+export const MULTI_ROW_SUBTABLES = new Set([4, 5, 7, 9, 13, 22, 23]);
 
 /**
  * Sub-tables that cover the household sector only.
