@@ -284,3 +284,20 @@ we resolved this by appending the parent context to each sub-row label.
 `tests/tmr-routing.test.ts` imports `SUBTABLE_KEYWORDS` (exported from tmr.ts)
 and reads `wca-2020.json` directly — zero API calls. All TMR structural
 assertions should live here; E2E tests with API calls are per-country tests.
+
+
+## Session 9 notes
+
+MULTI_ROW_SUBTABLES = {4, 5, 7, 9, 13, 22, 23} — exported from tmr.ts.
+Sub-table 13: 22 rows, one API call per row, three sum_to_total rules
+(Large ruminants, Small ruminants, Poultry). Row-alignment defence active.
+
+CROP TOTAL TOLERANCE: Sub-tables 22 and 23 use tolerance 1000 on
+sum_to_total validation. Reason: enumerated crop sub-rows do not always
+sum to published total because some crop types are aggregated differently
+by the NSO. This is intentional — do not reduce without testing against
+Nepal and Pakistan data.
+
+WORKTREE GUARD: confirmed working in sessions 8 and 9. Agent detects
+worktree path, stops, and writes to absolute paths. Keep the guard line
+at the top of every session prompt.
