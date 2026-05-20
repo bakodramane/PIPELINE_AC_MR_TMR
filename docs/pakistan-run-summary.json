@@ -1,0 +1,391 @@
+{
+  "country": "Pakistan",
+  "country_iso3": "PAK",
+  "census_round": "WCA 2020",
+  "reference_year": "2024",
+  "session": "Session 10",
+  "run_timestamp": "2026-05-20T21:28:34.748Z",
+  "project_dir": "C:\\Users\\Dramane\\AppData\\Local\\Temp\\agcensus-pakistan-98aIxa",
+  "model": "deepseek-v4-flash",
+  "pdf_ingested": {
+    "source_doc_id": "01-main-report",
+    "pdf_path": "C:\\Users\\Dramane\\Desktop\\PIPELINE\\references\\pakistan-2024\\sources\\main-report.pdf",
+    "pages_indexed": 110,
+    "tables_indexed": 0,
+    "ingest_time_ms": 19028
+  },
+  "mr_sections": {
+    "section_1": {
+      "status": "ok",
+      "claims_count": 7,
+      "wall_time_ms": 4548,
+      "input_tokens": 9635,
+      "output_tokens": 640,
+      "cost_usd": 0.0015281000000000001
+    },
+    "section_2": {
+      "status": "ok",
+      "claims_count": 6,
+      "wall_time_ms": 3524,
+      "input_tokens": 4145,
+      "output_tokens": 587,
+      "cost_usd": 0.0007446600000000001
+    },
+    "section_3": {
+      "status": "ok",
+      "claims_count": 2,
+      "wall_time_ms": 2164,
+      "input_tokens": 3328,
+      "output_tokens": 296,
+      "cost_usd": 0.0005488000000000001
+    },
+    "section_4": {
+      "status": "ok",
+      "claims_count": 1,
+      "wall_time_ms": 1515,
+      "input_tokens": 3631,
+      "output_tokens": 132,
+      "cost_usd": 0.0005453000000000001
+    },
+    "section_5": {
+      "status": "ok",
+      "claims_count": 7,
+      "wall_time_ms": 4759,
+      "input_tokens": 5401,
+      "output_tokens": 743,
+      "cost_usd": 0.00096418
+    },
+    "section_6": {
+      "status": "ok",
+      "claims_count": 5,
+      "wall_time_ms": 3029,
+      "input_tokens": 4287,
+      "output_tokens": 452,
+      "cost_usd": 0.0007267400000000001
+    },
+    "section_7": {
+      "status": "ok",
+      "claims_count": 7,
+      "wall_time_ms": 4849,
+      "input_tokens": 6315,
+      "output_tokens": 691,
+      "cost_usd": 0.00107758
+    },
+    "section_8": {
+      "status": "ok",
+      "claims_count": 6,
+      "wall_time_ms": 5327,
+      "input_tokens": 13476,
+      "output_tokens": 645,
+      "cost_usd": 0.00206724
+    },
+    "section_9": {
+      "status": "empty",
+      "claims_count": 0,
+      "wall_time_ms": 2805,
+      "input_tokens": 3199,
+      "output_tokens": 379,
+      "cost_usd": 0.00055398
+    },
+    "section_10": {
+      "status": "parse_failed",
+      "claims_count": 0,
+      "wall_time_ms": 5599,
+      "input_tokens": 6691,
+      "output_tokens": 1024,
+      "cost_usd": 0.00122346
+    },
+    "section_11": {
+      "status": "ok",
+      "claims_count": 6,
+      "wall_time_ms": 3609,
+      "input_tokens": 5434,
+      "output_tokens": 557,
+      "cost_usd": 0.0009167200000000001
+    },
+    "section_12": {
+      "status": "ok",
+      "claims_count": 1,
+      "wall_time_ms": 2302,
+      "input_tokens": 21821,
+      "output_tokens": 104,
+      "cost_usd": 0.0030840600000000004
+    },
+    "section_13": {
+      "status": "ok",
+      "claims_count": 3,
+      "wall_time_ms": 3053,
+      "input_tokens": 2884,
+      "output_tokens": 360,
+      "cost_usd": 0.00050456
+    },
+    "section_14": {
+      "status": "ok",
+      "claims_count": 5,
+      "wall_time_ms": 3203,
+      "input_tokens": 3024,
+      "output_tokens": 497,
+      "cost_usd": 0.00056252
+    },
+    "section_15": {
+      "status": "ok",
+      "claims_count": 3,
+      "wall_time_ms": 2251,
+      "input_tokens": 3922,
+      "output_tokens": 286,
+      "cost_usd": 0.0006291600000000001
+    }
+  },
+  "mr_status_counts": {
+    "ok": 13,
+    "empty": 1,
+    "parse_failed": 1
+  },
+  "tmr_sub_tables": {
+    "sub_table_1": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 8,
+      "validation_flags_count": 0,
+      "wall_time_ms": 3048,
+      "input_tokens": 2660,
+      "output_tokens": 513,
+      "cost_usd": 0.00051604
+    },
+    "sub_table_2": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 12,
+      "validation_flags_count": 0,
+      "wall_time_ms": 3794,
+      "input_tokens": 1268,
+      "output_tokens": 739,
+      "cost_usd": 0.00038444000000000005
+    },
+    "sub_table_3": {
+      "status": "parse_failed",
+      "cells_populated": 0,
+      "cells_missing": 0,
+      "validation_flags_count": 0,
+      "wall_time_ms": 6355,
+      "input_tokens": 17545,
+      "output_tokens": 1024,
+      "cost_usd": 0.0027430200000000005
+    },
+    "sub_table_4": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 24,
+      "validation_flags_count": 0,
+      "wall_time_ms": 26450,
+      "input_tokens": 203187,
+      "output_tokens": 1916,
+      "cost_usd": 0.028982660000000007
+    },
+    "sub_table_5": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 26,
+      "validation_flags_count": 0,
+      "wall_time_ms": 28273,
+      "input_tokens": 219957,
+      "output_tokens": 2106,
+      "cost_usd": 0.03138366
+    },
+    "sub_table_6": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 10,
+      "validation_flags_count": 0,
+      "wall_time_ms": 4778,
+      "input_tokens": 18526,
+      "output_tokens": 684,
+      "cost_usd": 0.0027851600000000005
+    },
+    "sub_table_7": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 15,
+      "validation_flags_count": 0,
+      "wall_time_ms": 21497,
+      "input_tokens": 51954,
+      "output_tokens": 1201,
+      "cost_usd": 0.0076098400000000005
+    },
+    "sub_table_8": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 14,
+      "validation_flags_count": 0,
+      "wall_time_ms": 5870,
+      "input_tokens": 12706,
+      "output_tokens": 977,
+      "cost_usd": 0.0020524000000000002
+    },
+    "sub_table_9": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 48,
+      "validation_flags_count": 0,
+      "wall_time_ms": 69999,
+      "input_tokens": 437855,
+      "output_tokens": 3978,
+      "cost_usd": 0.06241354000000002
+    },
+    "sub_table_10": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 6,
+      "validation_flags_count": 0,
+      "wall_time_ms": 3610,
+      "input_tokens": 17036,
+      "output_tokens": 436,
+      "cost_usd": 0.0025071200000000003
+    },
+    "sub_table_11": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 14,
+      "validation_flags_count": 0,
+      "wall_time_ms": 6190,
+      "input_tokens": 17439,
+      "output_tokens": 920,
+      "cost_usd": 0.00269906
+    },
+    "sub_table_12": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 12,
+      "validation_flags_count": 0,
+      "wall_time_ms": 5028,
+      "input_tokens": 17220,
+      "output_tokens": 757,
+      "cost_usd": 0.00262276
+    },
+    "sub_table_13": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 44,
+      "validation_flags_count": 0,
+      "wall_time_ms": 41517,
+      "input_tokens": 43105,
+      "output_tokens": 3136,
+      "cost_usd": 0.006912780000000002
+    },
+    "sub_table_14": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 10,
+      "validation_flags_count": 0,
+      "wall_time_ms": 3879,
+      "input_tokens": 1334,
+      "output_tokens": 767,
+      "cost_usd": 0.00040152000000000005
+    },
+    "sub_table_15": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 8,
+      "validation_flags_count": 0,
+      "wall_time_ms": 3572,
+      "input_tokens": 17071,
+      "output_tokens": 513,
+      "cost_usd": 0.00253358
+    },
+    "sub_table_16": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 10,
+      "validation_flags_count": 0,
+      "wall_time_ms": 4471,
+      "input_tokens": 17300,
+      "output_tokens": 690,
+      "cost_usd": 0.0026152000000000003
+    },
+    "sub_table_17": {
+      "status": "parse_failed",
+      "cells_populated": 0,
+      "cells_missing": 0,
+      "validation_flags_count": 0,
+      "wall_time_ms": 5192,
+      "input_tokens": 3074,
+      "output_tokens": 1024,
+      "cost_usd": 0.00071708
+    },
+    "sub_table_18": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 12,
+      "validation_flags_count": 0,
+      "wall_time_ms": 7288,
+      "input_tokens": 18876,
+      "output_tokens": 779,
+      "cost_usd": 0.0028607600000000004
+    },
+    "sub_table_19": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 12,
+      "validation_flags_count": 0,
+      "wall_time_ms": 9244,
+      "input_tokens": 18493,
+      "output_tokens": 779,
+      "cost_usd": 0.0028071400000000005
+    },
+    "sub_table_20": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 8,
+      "validation_flags_count": 0,
+      "wall_time_ms": 3411,
+      "input_tokens": 17068,
+      "output_tokens": 566,
+      "cost_usd": 0.0025480000000000004
+    },
+    "sub_table_21": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 9,
+      "validation_flags_count": 0,
+      "wall_time_ms": 4940,
+      "input_tokens": 17138,
+      "output_tokens": 647,
+      "cost_usd": 0.00258048
+    },
+    "sub_table_22": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 30,
+      "validation_flags_count": 0,
+      "wall_time_ms": 44939,
+      "input_tokens": 253294,
+      "output_tokens": 2280,
+      "cost_usd": 0.03609956
+    },
+    "sub_table_23": {
+      "status": "empty",
+      "cells_populated": 0,
+      "cells_missing": 22,
+      "validation_flags_count": 0,
+      "wall_time_ms": 29132,
+      "input_tokens": 185817,
+      "output_tokens": 1745,
+      "cost_usd": 0.026502980000000002
+    }
+  },
+  "tmr_status_counts": {
+    "ok": 0,
+    "empty": 21,
+    "parse_failed": 2
+  },
+  "totals": {
+    "mr_claims_total": 59,
+    "tmr_cells_populated": 0,
+    "tmr_cells_missing": 354,
+    "total_input_tokens": 1707116,
+    "total_output_tokens": 35570,
+    "total_cost_usd": 0.24896,
+    "total_wall_time_ms": 395014,
+    "total_wall_time_minutes": 6.6
+  }
+}

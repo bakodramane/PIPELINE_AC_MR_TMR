@@ -301,3 +301,55 @@ Nepal and Pakistan data.
 WORKTREE GUARD: confirmed working in sessions 8 and 9. Agent detects
 worktree path, stops, and writes to absolute paths. Keep the guard line
 at the top of every session prompt.
+
+
+## Session 10 — E2E checkpoint (Nepal + Pakistan)
+
+**Files created:**
+- `scripts/run-nepal.ts` — full E2E runner (15 MR + 23 TMR, deepseek-v4-flash)
+- `scripts/run-pakistan.ts` — same for Pakistan
+- `vitest.scripts.config.ts` — separate Vitest config for scripts/ (include: scripts/run-*.ts)
+- `docs/nepal-run-summary.json` — actual run results
+- `docs/pakistan-run-summary.json` — actual run results
+- `docs/v1-week4-checkpoint.md` — full checkpoint document
+
+**Run command:**
+```
+node "C:\Users\Dramane\Desktop\PIPELINE\node_modules\vitest\vitest.mjs" ^
+  run --root "C:\Users\Dramane\Desktop\PIPELINE" ^
+  --config vitest.scripts.config.ts --reporter verbose ^
+  --testNamePattern "Nepal"
+```
+(The `include: tests/**/*.test.ts` in vitest.config.ts blocks scripts/ —
+use vitest.scripts.config.ts instead.)
+
+
+## Session 10 notes
+
+NEPAL RESULTS (deepseek-v4-flash, 5.4 min, $0.17):
+- MR: 14/15 ok, 1 parse_failed (§2 Legal Basis — hit 1024-token limit)
+- TMR: 13/23 ok, 8/23 empty, 2 parse_failed (ST3 parcels, ST17 irrigation source)
+- TMR cells: 107 populated / 247 missing
+- Best TMR: ST9 holder age (41/48 cells), ST2 tenure (12/12)
+- Empty TMR: ST8 holder sex, ST10 household size, ST12 livestock system,
+  ST15–16 irrigation method/use, ST18–20 machinery/inputs — absent from Nepal NSCA
+
+PAKISTAN RESULTS (deepseek-v4-flash, 6.9 min, $0.25):
+- MR: 13/15 ok, 1 empty (§9 Data Processing), 1 parse_failed (§10 Quality Assurance)
+- TMR: 0/23 ok, 21/23 empty, 2 parse_failed (ST3, ST17)
+- TMR cells: 0 populated — COMPLETE FAILURE
+- Root cause: Pakistan main-report.pdf (110 pages, 0 tables) is a narrative document;
+  the statistical tables volume has not been ingested. Need to find and ingest it.
+
+PARSE FAILURE PATTERN: Sections §2, §10 and sub-tables ST3, ST17 consistently hit the
+1024-token max_tokens limit. Fix in Session 11: raise limits for these to 1500.
+
+SECTION 1 PAKISTAN QUALITY GAP: Still cites 1972 as first census; correct is 1960.
+Fix in Session 13: add keywords '1960', 'first census' to SECTION_KEYWORDS[1].
+
+COST: $0.42 for both countries combined (well under the $2–5 estimate).
+DeepSeek V4-Flash promo pricing ($0.435/$0.87 per M) expires 2026-05-31.
+
+VITEST SCRIPTS CONFIG: vitest.scripts.config.ts uses testTimeout: 7_200_000 (2 hours).
+The scripts themselves set the same timeout internally. Background run via
+run_in_background: true works — the process is NOT killed at the Bash 10-min limit.
