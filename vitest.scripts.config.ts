@@ -17,10 +17,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["scripts/run-*.ts"],
+    include: ["scripts/run-*.ts", "scripts/verify-*.ts"],
     // 2-hour test timeout — each script runs 15 MR sections + 23 TMR sub-tables
     testTimeout: 7_200_000,
-    hookTimeout: 60_000,
+    hookTimeout: 1_800_000, // 30 min for verify scripts' beforeAll ingest + generation
     // Scripts must run sequentially — both share the DeepSeek API key and
     // concurrent calls cause rate-limit errors.
     fileParallelism: false,

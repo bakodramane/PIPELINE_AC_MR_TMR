@@ -353,3 +353,70 @@ DeepSeek V4-Flash promo pricing ($0.435/$0.87 per M) expires 2026-05-31.
 VITEST SCRIPTS CONFIG: vitest.scripts.config.ts uses testTimeout: 7_200_000 (2 hours).
 The scripts themselves set the same timeout internally. Background run via
 run_in_background: true works — the process is NOT killed at the Bash 10-min limit.
+
+
+## Session 11 — Token budget fixes + Pakistan TMR data source
+
+**Files created/modified:**
+- `src/generators/mr.ts` — token budget + keyword fixes:
+  - `SECTION_MAX_TOKENS` extended: added `2: 1500, 4: 1500, 10: 1500` (those three
+    consistently parse_failed at 1024 in Session 10)
+  - `SECTION_MAX_PAGES` new map: `{ 1: 30 }` — section 1 now retrieves 30 pages
+    instead of 20 to surface Pakistan's 1960 first-census-year reference
+  - `SECTION_KEYWORDS[1]` extended: added `"1960"`, `"1952"`, `"first census"`,
+    `"earliest"`, `"history of"`
+  - Evidence retrieval now passes `SECTION_MAX_PAGES[sectionNumber] ?? 20` as third arg
+  - Truncation detection: `wasTruncated = result.finishReason === 'length'`; spreads
+    `truncated: true` into the audit event, `truncated_warning: true` into `_claims.json`,
+    and prepends a ⚠️ warning header to `current.md` when the parse succeeds but output
+    was cut; extends the parse-failure warning to mention the truncation
+- `src/generators/tmr.ts` — token budget + truncation detection:
+  - `SUB_TABLE_MAX_TOKENS` new map: `{ 3: 1500, 17: 1500 }` (those two parse_failed
+    at 1024 in Session 10)
+  - `generate()` now uses `SUB_TABLE_MAX_TOKENS[subTableNumber] ?? MAX_TOKENS`
+  - `anyTruncated` boolean; set when any row call returns `finishReason === 'length'`
+  - `truncated: true` spread into both the parse-failure path and the success path of
+    `_cells.json`, and into the audit event
+- `references/pakistan-2024/sources/02-statistical-tables.pdf` — copied from
+  `references/pakistan-2024/EXAMPLE OF TABLE OF Main results  PAKISTAN.pdf` (double space)
+- `scripts/verify-pakistan-tmr.ts` — Vitest verification script:
+  - Ingests `02-statistical-tables.pdf` into a fresh Pakistan project
+  - Runs `generateSubTable` for sub-tables 1 and 2 with `deepseek-v4-flash`
+  - Prints all populated cells to console
+  - Asserts `Total_Holdings` is a number and equals 11,701,584 (±1000)
+- `vitest.scripts.config.ts` — added `"scripts/verify-*.ts"` to include array;
+  raised `hookTimeout` to 1,800,000 ms (30 min) to accommodate ingest + generation
+
+---
+
+## Session 11 notes
+
+PAKISTAN TMR VERIFY RESULTS (9 s, 2/2 tests passed):
+- 02-statistical-tables.pdf: 6 pages, 0 tables indexed (162 ms ingest)
+- ST1 Total_Holdings: 11,701,584 — exact match, delta = 0
+- ST1 Total_Area: 23,998,161 ha — found
+- ST2 Owner: 10,386,504 holdings | Owner-cum-tenant: 547,977 | Tenants: 767,103
+- Legal-status breakdown rows (Civil/Juridical) correctly return ".." — not in
+  Pakistan census terminology, consistent with Nepal behaviour
+
+TOKEN BUDGET CHANGES:
+- MR sections 2, 4, 10 raised to 1500. Combined with existing 7 and 13,
+  five sections now use 1500 tokens. All others remain at 1024.
+- TMR sub-tables 3 and 17 raised to 1500. All others remain at 1024.
+- Truncation is now surfaced in: audit event (truncated: true),
+  _claims.json (truncated_warning: true), current.md (⚠️ header),
+  _cells.json (truncated: true). Never silently discarded.
+
+KEYWORD COVERAGE (Section 1):
+- Added historical census years (1960, 1952) and phrasing variants to
+  SECTION_KEYWORDS[1]. maxPages raised to 30 for this section only.
+  Full verification deferred to Session 12 (re-run Pakistan §1).
+
+BEFOREALL IN VITEST: beforeAll() does NOT accept a context argument.
+Only test() callbacks receive a context. Use `if (!shouldRun) return;`
+inside beforeAll; use `ctx.skip()` only inside test() callbacks.
+
+NEXT SESSION: Re-run full Pakistan pipeline (15 MR + 23 TMR) against
+both main-report.pdf AND 02-statistical-tables.pdf to measure improvement.
+Expected: ST1/ST2 fully populated, ST3/ST17 parse failures resolved,
+Pakistan §1 first-census-year corrected to 1960.

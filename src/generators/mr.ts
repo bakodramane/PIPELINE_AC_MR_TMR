@@ -71,6 +71,7 @@ const SECTION_KEYWORDS: Record<number, string[]> = {
   1: [
     "census", "history", "first", "year", "conducted", "previous", "round",
     "agricultural census", "livestock census", "population census", "sample census",
+    "1960", "1952", "first census", "earliest", "history of",
   ],
   2: [
     "law", "legal", "decree", "regulation", "act", "statute", "ordinance",
@@ -184,12 +185,25 @@ const SECTION_TITLES: Record<number, string> = {
 
 /**
  * Per-section maxTokens budget.
- * Sections 7 (Methodology) and 13 (Dissemination) require longer responses.
- * All other sections use 1024.
+ * Sections that consistently hit the 1024 limit (parse_failed in Session 10)
+ * are raised to 1500. All other sections use 1024.
  */
 const SECTION_MAX_TOKENS: Record<number, number> = {
+  2:  1500,
+  4:  1500,
   7:  1500,
+  10: 1500,
   13: 1500,
+};
+
+/**
+ * Per-section maxPages override for evidence retrieval.
+ * Section 1 (Historical Outline) uses 30 pages to ensure the first-census-year
+ * reference (which may appear on a less prominent page) is surfaced.
+ * All other sections default to 20.
+ */
+const SECTION_MAX_PAGES: Record<number, number> = {
+  1: 30,
 };
 
 // ---------------------------------------------------------------------------
@@ -372,7 +386,8 @@ export async function generateSection(
 
   // ── 2. Retrieve evidence ─────────────────────────────────────────────────
   const keywords = SECTION_KEYWORDS[sectionNumber] ?? [];
-  const pages = await retrieveEvidence(projectDir, keywords);
+  const maxPages = SECTION_MAX_PAGES[sectionNumber] ?? 20;
+  const pages = await retrieveEvidence(projectDir, keywords, maxPages);
 
   const evidenceBlock = formatEvidenceBlock(pages);
   const userPrompt = buildUserPrompt(
@@ -391,6 +406,7 @@ export async function generateSection(
     maxTokens,
   });
   const wallTimeMs = Date.now() - wallStart;
+  const wasTruncated = result.finishReason === 'length';
 
   // ── 4. Parse the response ────────────────────────────────────────────────
   const stripped = stripFences(result.text);
@@ -412,8 +428,11 @@ export async function generateSection(
 
   if (parseFailed || !parsed) {
     // Graceful fallback: write raw text with a warning header
+    const truncationNote = wasTruncated
+      ? ` Output was **truncated at max_tokens** — raise SECTION_MAX_TOKENS[${sectionNumber}].`
+      : '';
     const warning =
-      `> ⚠️ **JSON parse failed for Section ${sectionNumber}.** ` +
+      `> ⚠️ **JSON parse failed for Section ${sectionNumber}.**${truncationNote} ` +
       `Raw model output is shown below. Human review required.\n\n`;
     await writeFile(currentMdPath, warning + result.text, "utf-8");
   } else {
@@ -451,7 +470,10 @@ export async function generateSection(
     } catch {
       // File doesn't exist yet — start fresh
     }
-    claimsJson[`section_${sectionNumber}`] = { claims: citedClaims };
+    claimsJson[`section_${sectionNumber}`] = {
+      claims: citedClaims,
+      ...(wasTruncated && { truncated_warning: true }),
+    };
     await writeJson(claimsJsonPath, claimsJson);
 
     // Render Markdown for current.md — includes ALL claims (cited + uncited)
@@ -470,7 +492,10 @@ export async function generateSection(
     }
 
     const md = renderMarkdown(sectionNumber, claims, pageNumMap);
-    await writeFile(currentMdPath, md, "utf-8");
+    const truncationMdWarning = wasTruncated
+      ? '> ⚠️ **Warning: model output was truncated (max_tokens reached). Claims may be incomplete.**\n\n'
+      : '';
+    await writeFile(currentMdPath, truncationMdWarning + md, "utf-8");
   }
 
   // ── 6. Append audit event ────────────────────────────────────────────────
@@ -487,6 +512,7 @@ export async function generateSection(
     cost_usd: result.costUsd,
     wall_time_ms: wallTimeMs,
     ...(parseFailed && { parse_failed: true }),
+    ...(wasTruncated && { truncated: true }),
   };
   await appendAuditEvent(projectDir, event as unknown as AuditEvent);
 }

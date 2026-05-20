@@ -79,8 +79,18 @@ const WCA_CONCEPTS_PATH = path.resolve(
 /** Acres to hectares conversion factor (exact). */
 const ACRES_TO_HA = 0.4047;
 
-/** maxTokens for all sub-table generation calls. */
+/** maxTokens for all sub-table generation calls (default). */
 const MAX_TOKENS = 1024;
+
+/**
+ * Per-sub-table maxTokens overrides.
+ * Sub-tables 3 (Holdings by parcels) and 17 (Irrigation source) hit the 1024
+ * limit in Session 10 runs, causing JSON truncation. Raised to 1500.
+ */
+const SUB_TABLE_MAX_TOKENS: Record<number, number> = {
+  3: 1500,
+  17: 1500,
+};
 
 /**
  * Evidence retrieval keywords per sub-table number.
@@ -800,6 +810,7 @@ export async function generateSubTable(
   const pagesDir = path.join(projectDir, "evidence", "pages");
 
   let anyParseFailed = false;
+  let anyTruncated = false;
   let wallTotal = 0;
   let inputTokensTotal = 0;
   let outputTokensTotal = 0;
@@ -829,7 +840,7 @@ export async function generateSubTable(
       systemPrompt,
       userPrompt,
       model,
-      maxTokens: MAX_TOKENS,
+      maxTokens: SUB_TABLE_MAX_TOKENS[subTableNumber] ?? MAX_TOKENS,
       // temperature=0 for data extraction: deterministic responses reduce the
       // risk of the model hallucinating or omitting values across runs.
       temperature: 0,
@@ -840,6 +851,7 @@ export async function generateSubTable(
     costUsdTotal += result.costUsd;
     lastModel = result.model;
     lastProvider = result.provider;
+    if (result.finishReason === 'length') anyTruncated = true;
 
     // Parse response
     const stripped = stripFences(result.text);
@@ -893,6 +905,7 @@ export async function generateSubTable(
     }
     cellsJson[subTableKey] = {
       parse_failed: true,
+      ...(anyTruncated && { truncated: true }),
       raw_response: "(all row calls failed to parse)",
       validation_flags: [],
     };
@@ -947,6 +960,7 @@ export async function generateSubTable(
       ...storedCells,
       validation_flags: validationFlags,
       ...(anyParseFailed && { parse_failed: true }),
+      ...(anyTruncated && { truncated: true }),
     };
     await writeJson(cellsJsonPath, cellsJson);
   }
@@ -965,6 +979,7 @@ export async function generateSubTable(
     cost_usd: costUsdTotal,
     wall_time_ms: wallTotal,
     ...(anyParseFailed && { parse_failed: true }),
+    ...(anyTruncated && { truncated: true }),
   };
   await appendAuditEvent(projectDir, event as unknown as AuditEvent);
 }
