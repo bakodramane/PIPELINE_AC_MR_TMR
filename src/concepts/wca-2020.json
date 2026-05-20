@@ -1,0 +1,33 @@
+{
+  "sub_tables": {
+    "1": {
+      "title": "Holdings and area, by legal status",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Civil persons",
+        "Group of civil persons",
+        "Juridical persons"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Civil persons + Group of civil persons + Juridical persons = Total",
+          "rows": ["Civil persons", "Group of civil persons", "Juridical persons"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    }
+  }
+}
