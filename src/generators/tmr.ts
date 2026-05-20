@@ -7,7 +7,9 @@
  *   1. Loads the WCA 2020 concept spec from src/concepts/wca-2020.json.
  *   2. Retrieves relevant evidence pages (keyword search) and evidence tables
  *      (full-text scan of evidence/tables/*.json).
- *   3. Calls generate() with the assembled prompt.
+ *   3. Calls generate() with the assembled prompt — once per sub-table for
+ *      sub-tables with ≤8 rows, or once per row for sub-tables with >8 rows
+ *      (see MULTI_ROW_SUBTABLES).
  *   4. Strips markdown fences and parses the JSON response.
  *   5. Verifies every cited source_table_id exists on disk; marks unverified
  *      cells with unverified_source: true (never drops the cell).
@@ -16,16 +18,18 @@
  *   7. Runs validation rules (sum_to_total); records failures in
  *      validation_flags on the sub-table object.
  *   8. Writes populated cells to drafts/tmr/_cells.json under sub_table_<N>.
- *   9. Appends a generation_completed audit event.
+ *   9. Appends a single generation_completed audit event (aggregates token
+ *      counts across all row calls for multi-row sub-tables).
  *
  * On JSON parse failure: writes a parse_failed marker to _cells.json,
  * appends the audit event with parse_failed: true, and returns — never throws.
  *
- * Design constraint (from Session Sequence document):
- *   Sub-table 1 has only 4 rows — a single model call is fine.
- *   For sub-tables with 10+ rows (livestock, crops), future generators
- *   MUST populate one row per model call.  Do not implement multi-row
- *   generation here; that belongs in the Session 8+ generators.
+ * Multi-row generation (MULTI_ROW_SUBTABLES):
+ *   Sub-tables 4, 5, 7, and 9 have more than 8 rows.  Sending all rows in a
+ *   single prompt causes the model to lose track of which row it is
+ *   populating, leading to transposed values and hallucinations.  For these
+ *   sub-tables the generator loops over spec.rows and makes one API call per
+ *   row.  Results are merged into a single _cells.json entry.
  *
  * Unit conversions:
  *   - 1 acre = 0.4047 ha  (exact factor stored in ACRES_TO_HA)
@@ -58,7 +62,7 @@ const PROMPT_VERSION = "v1.3";
 /**
  * Path to the WCA 2020 concept registry.
  * Resolved as: <src/generators/../concepts/wca-2020.json>
- *            = <worktree-root>/src/concepts/wca-2020.json
+ *            = <project-root>/src/concepts/wca-2020.json
  */
 const WCA_CONCEPTS_PATH = path.resolve(
   __dirname,
@@ -73,8 +77,12 @@ const ACRES_TO_HA = 0.4047;
 /** maxTokens for all sub-table generation calls. */
 const MAX_TOKENS = 1024;
 
-/** Evidence retrieval keywords per sub-table number. */
-const SUBTABLE_KEYWORDS: Record<number, string[]> = {
+/**
+ * Evidence retrieval keywords per sub-table number.
+ * Exported so the smoke test can verify entries exist for all supported
+ * sub-table numbers without making any API calls.
+ */
+export const SUBTABLE_KEYWORDS: Record<number, string[]> = {
   1: [
     "holdings",
     "legal status",
@@ -83,7 +91,92 @@ const SUBTABLE_KEYWORDS: Record<number, string[]> = {
     "total holdings",
     "area",
   ],
+  2: [
+    "tenure",
+    "owner",
+    "tenant",
+    "rented",
+    "legal ownership",
+  ],
+  3: [
+    "parcel",
+    "fragmentation",
+    "plot",
+    "land fragment",
+  ],
+  4: [
+    "size class",
+    "farm size",
+    "size distribution",
+    "hectares",
+    "land area",
+  ],
+  5: [
+    "land use",
+    "arable",
+    "temporary crops",
+    "permanent crops",
+    "pastures",
+    "fallow",
+  ],
+  6: [
+    "purpose",
+    "sale",
+    "consumption",
+    "market",
+    "household production",
+  ],
+  7: [
+    "household members",
+    "household",
+    "age",
+    "male",
+    "female",
+    "agricultural activities",
+  ],
+  8: [
+    "holder",
+    "sex",
+    "male holder",
+    "female holder",
+    "co-holder",
+    "joint holder",
+  ],
+  9: [
+    "holder age",
+    "age group",
+    "years",
+    "male",
+    "female",
+  ],
+  10: [
+    "household size",
+    "household members",
+    "persons",
+    "family size",
+  ],
+  11: [
+    "manager",
+    "employee",
+    "worker",
+    "hired labour",
+    "labor",
+    "paid worker",
+  ],
 };
+
+/**
+ * Sub-tables that require one model call per row to avoid row-alignment errors.
+ * These sub-tables have more than 8 rows; sending all rows in a single prompt
+ * causes the model to lose track of which row it is populating.
+ */
+const MULTI_ROW_SUBTABLES = new Set([4, 5, 7, 9]);
+
+/**
+ * Sub-tables that cover the household sector only.
+ * A note is added to the user prompt to remind the model of this constraint.
+ */
+const HOUSEHOLD_SECTOR_SUBTABLES = new Set([6, 7, 8, 9, 10]);
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -99,6 +192,8 @@ interface ValidationRule {
   description: string;
   rows: string[];
   total_row: string;
+  /** Maximum acceptable delta between sum and total (default: 1). */
+  tolerance?: number;
 }
 
 interface SubTableSpec {
@@ -125,7 +220,7 @@ interface ModelCellEntry {
   derivation: string | null;
 }
 
-/** The model's full response for one sub-table. */
+/** The model's full response for one sub-table (or one row). */
 interface ModelSubTableResponse {
   sub_table: number;
   cells: Record<string, ModelCellEntry>;
@@ -199,6 +294,14 @@ function buildExpectedCellKeys(spec: SubTableSpec): string[] {
     }
   }
   return keys;
+}
+
+/**
+ * Build cell keys for a single row across all columns.
+ * Used for one-row-per-call generation in multi-row sub-tables.
+ */
+function buildRowCellKeys(spec: SubTableSpec, rowLabel: string): string[] {
+  return Object.keys(spec.columns).map((col) => toCellKey(rowLabel, col));
 }
 
 /**
@@ -353,29 +456,57 @@ Rules:
 6. Return ONLY valid JSON — no markdown code fences, no explanatory text before or after the JSON.`;
 }
 
+/**
+ * Build the user prompt for one sub-table generation call.
+ *
+ * @param subTableNumber    The sub-table number.
+ * @param spec              The WCA 2020 sub-table specification.
+ * @param pages             Relevant evidence pages.
+ * @param tables            Relevant evidence tables.
+ * @param cellsToPopulate   Cell keys to ask the model to populate (may be a
+ *                          subset of all keys when singleRow is set).
+ * @param singleRow         When set, the model populates only this one row.
+ *                          Used for multi-row sub-tables (MULTI_ROW_SUBTABLES).
+ * @param isHouseholdSector When true, adds a household-sector-only note to the
+ *                          prompt (for sub-tables 6–10).
+ */
 function buildUserPrompt(
   subTableNumber: number,
   spec: SubTableSpec,
   pages: PageJson[],
   tables: TableJson[],
-  expectedCellKeys: string[],
+  cellsToPopulate: string[],
+  singleRow?: string,
+  isHouseholdSector?: boolean,
 ): string {
-  // Build cell key → (row, col) description for the prompt
+  // Build cell key → (row, col) description, filtered to cellsToPopulate
   const cellDescriptions: string[] = [];
+  const cellKeySet = new Set(cellsToPopulate);
   for (const rowLabel of spec.rows) {
     for (const colLabel of Object.keys(spec.columns)) {
       const key = toCellKey(rowLabel, colLabel);
-      const colSpec = spec.columns[colLabel];
-      cellDescriptions.push(
-        `  "${key}": row="${rowLabel}", column="${colLabel}", expected unit="${colSpec.unit}"`,
-      );
+      if (cellKeySet.has(key)) {
+        const colSpec = spec.columns[colLabel];
+        cellDescriptions.push(
+          `  "${key}": row="${rowLabel}", column="${colLabel}", expected unit="${colSpec.unit}"`,
+        );
+      }
     }
   }
 
-  return `## Sub-Table Specification
+  // Optional banners
+  const singleRowBanner = singleRow
+    ? `\n\n**ONE ROW ONLY:** This call populates a single row. Provide data ONLY for the row: "${singleRow}". Do not populate any other rows.`
+    : "";
+
+  const householdSectorNote = isHouseholdSector
+    ? `\n\nUniverse note: This sub-table covers the **household sector only**. Only include holdings operated by civil persons or groups of civil persons (i.e. individual farm households).`
+    : "";
+
+  return `## Sub-Table Specification${singleRowBanner}
 
 Sub-Table ${subTableNumber}: ${spec.title}
-Universe: ${spec.universe}
+Universe: ${spec.universe}${householdSectorNote}
 
 Rows: ${spec.rows.join(" | ")}
 Columns: ${Object.entries(spec.columns)
@@ -384,7 +515,7 @@ Columns: ${Object.entries(spec.columns)
 
 ## Required Cells
 
-Populate exactly these ${expectedCellKeys.length} cells (key = row_column, spaces as underscores, parenthetical unit suffixes stripped):
+Populate exactly these ${cellsToPopulate.length} cells (key = row_column, spaces as underscores, parenthetical unit suffixes stripped):
 
 ${cellDescriptions.join("\n")}
 
@@ -409,7 +540,7 @@ Return ONLY a valid JSON object — no markdown fences, no preamble. Exact struc
 {
   "sub_table": ${subTableNumber},
   "cells": {
-${cellDescriptions.map(d => `    ${d.trim().split(":")[0]}: { ... }`).join(",\n")}
+${cellDescriptions.map((d) => `    ${d.trim().split(":")[0]}: { ... }`).join(",\n")}
   }
 }
 
@@ -430,7 +561,38 @@ Source ID rules:
 - Found in page text only → use the page_id (e.g. "01-main-report-p0026")
 - Genuinely not found anywhere → set value to ".." and source_table_id to ""
 
-Provide all ${expectedCellKeys.length} cells.`;
+Provide all ${cellsToPopulate.length} cells.`;
+}
+
+// ---------------------------------------------------------------------------
+// Source verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Check whether a source ID (table_id or page_id) exists on disk.
+ * Returns true when:
+ *   - sourceId is empty (no source required — legitimately missing value)
+ *   - The file exists in evidence/tables/ or evidence/pages/
+ * Returns false only when sourceId is non-empty AND not found in either directory.
+ */
+async function verifySource(
+  sourceId: string,
+  tablesDir: string,
+  pagesDir: string,
+): Promise<boolean> {
+  const id = (sourceId ?? "").trim();
+  if (!id) return true; // empty source = legitimate "not available"
+  try {
+    await access(path.join(tablesDir, `${id}.json`));
+    return true;
+  } catch {
+    try {
+      await access(path.join(pagesDir, `${id}.json`));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -439,14 +601,15 @@ Provide all ${expectedCellKeys.length} cells.`;
 
 /**
  * Run one sum_to_total validation rule for one column.
- * Returns a ValidationFlag if the rule fails (delta > 1), null if it passes
- * or cannot be evaluated (missing numeric values).
+ * Returns a ValidationFlag if the rule fails (delta > tolerance), null if it
+ * passes or cannot be evaluated (missing numeric values).
  */
 function runValidationRule(
   cells: Record<string, TmrCell>,
   rule: ValidationRule,
   colLabel: string,
 ): ValidationFlag | null {
+  const tolerance = rule.tolerance ?? 1;
   const totalKey = toCellKey(rule.total_row, colLabel);
   const totalCell = cells[totalKey];
   if (!totalCell || typeof totalCell.value !== "number") return null;
@@ -460,7 +623,7 @@ function runValidationRule(
   }
 
   const delta = Math.abs(sum - totalCell.value);
-  if (delta > 1) {
+  if (delta > tolerance) {
     return {
       rule: rule.rule,
       column: colLabel,
@@ -480,8 +643,12 @@ function runValidationRule(
 /**
  * Generate one TMR sub-table and persist results to the project directory.
  *
+ * Sub-tables with ≤8 rows (e.g. 1, 2, 3, 6, 8, 10, 11) use a single model
+ * call.  Sub-tables with >8 rows (4, 5, 7, 9) use one call per row to prevent
+ * the model from transposing or hallucinating values across rows.
+ *
  * @param projectDir      Absolute path to the country project directory.
- * @param subTableNumber  The sub-table number to generate (currently 1–26).
+ * @param subTableNumber  The sub-table number to generate (currently 1–11).
  * @param model           The model to use for generation.
  */
 export async function generateSubTable(
@@ -504,105 +671,85 @@ export async function generateSubTable(
   // ── 1. Build expected cell keys ───────────────────────────────────────────
   const expectedCellKeys = buildExpectedCellKeys(spec);
 
-  // ── 2. Retrieve evidence ──────────────────────────────────────────────────
+  // ── 2. Retrieve evidence (shared across all row calls) ────────────────────
   const keywords = SUBTABLE_KEYWORDS[subTableNumber] ?? [];
-  // 15 pages — some censuses spread the legal-status table across multiple pages
+  // 15 pages — some censuses spread a topic across multiple pages
   const pages = await retrieveEvidence(projectDir, keywords, 15);
   const evidenceTables = await retrieveEvidenceTables(projectDir, keywords);
 
-  // ── 3. Build prompts ──────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt();
-  const userPrompt = buildUserPrompt(
-    subTableNumber,
-    spec,
-    pages,
-    evidenceTables,
-    expectedCellKeys,
-  );
+  // ── 3. Determine generation strategy ─────────────────────────────────────
+  const isMultiRow = MULTI_ROW_SUBTABLES.has(subTableNumber);
+  const isHouseholdSector = HOUSEHOLD_SECTOR_SUBTABLES.has(subTableNumber);
+  // For multi-row: iterate every spec row.  For single-call: null sentinel.
+  const rowsToProcess: Array<string | null> = isMultiRow ? spec.rows : [null];
 
-  // ── 4. Call the model ─────────────────────────────────────────────────────
-  const wallStart = Date.now();
-  const result = await generate({
-    systemPrompt,
-    userPrompt,
-    model,
-    maxTokens: MAX_TOKENS,
-    // temperature=0 for data extraction: deterministic responses reduce the
-    // risk of the model hallucinating or omitting values across runs.
-    temperature: 0,
-  });
-  const wallTimeMs = Date.now() - wallStart;
+  // ── 4. Generate cells ─────────────────────────────────────────────────────
+  const storedCells: Record<string, TmrCell> = {};
+  const tablesDir = path.join(projectDir, "evidence", "tables");
+  const pagesDir = path.join(projectDir, "evidence", "pages");
 
-  // ── 5. Parse response ─────────────────────────────────────────────────────
-  const stripped = stripFences(result.text);
-  let parsed: ModelSubTableResponse | null = null;
-  let parseFailed = false;
+  let anyParseFailed = false;
+  let wallTotal = 0;
+  let inputTokensTotal = 0;
+  let outputTokensTotal = 0;
+  let costUsdTotal = 0;
+  let lastModel: Model = model;
+  let lastProvider = "";
 
-  try {
-    parsed = JSON.parse(stripped) as ModelSubTableResponse;
-    if (!parsed.cells || typeof parsed.cells !== "object") {
-      throw new Error("Response JSON missing 'cells' object");
-    }
-  } catch {
-    parseFailed = true;
-  }
+  for (const singleRow of rowsToProcess) {
+    // Cells to populate on this call: all cells (single-call) or this row's cells
+    const cellsForThisCall = singleRow
+      ? buildRowCellKeys(spec, singleRow)
+      : expectedCellKeys;
 
-  // ── 6. Paths ──────────────────────────────────────────────────────────────
-  const cellsJsonPath = path.join(projectDir, "drafts", "tmr", "_cells.json");
-  const subTableKey = `sub_table_${subTableNumber}`;
+    const systemPrompt = buildSystemPrompt();
+    const userPrompt = buildUserPrompt(
+      subTableNumber,
+      spec,
+      pages,
+      evidenceTables,
+      cellsForThisCall,
+      singleRow ?? undefined,
+      isHouseholdSector,
+    );
 
-  if (parseFailed || !parsed) {
-    // Graceful fallback — write a parse_failed marker so the UI can surface it
-    let cellsJson: Record<string, unknown> = {};
+    const wallStart = Date.now();
+    const result = await generate({
+      systemPrompt,
+      userPrompt,
+      model,
+      maxTokens: MAX_TOKENS,
+      // temperature=0 for data extraction: deterministic responses reduce the
+      // risk of the model hallucinating or omitting values across runs.
+      temperature: 0,
+    });
+    wallTotal += Date.now() - wallStart;
+    inputTokensTotal += result.inputTokens;
+    outputTokensTotal += result.outputTokens;
+    costUsdTotal += result.costUsd;
+    lastModel = result.model;
+    lastProvider = result.provider;
+
+    // Parse response
+    const stripped = stripFences(result.text);
+    let parsed: ModelSubTableResponse | null = null;
     try {
-      cellsJson = await readJson<Record<string, unknown>>(cellsJsonPath);
-    } catch {
-      // start fresh
-    }
-    cellsJson[subTableKey] = {
-      parse_failed: true,
-      raw_response: result.text.slice(0, 500), // truncated for storage
-      validation_flags: [],
-    };
-    await writeJson(cellsJsonPath, cellsJson);
-  } else {
-    // ── 7. Verify source tables / pages ──────────────────────────────────
-    const tablesDir = path.join(projectDir, "evidence", "tables");
-    const pagesDir = path.join(projectDir, "evidence", "pages");
-    const storedCells: Record<string, TmrCell> = {};
-
-    for (const [cellKey, modelCell] of Object.entries(parsed.cells)) {
-      // The source ID can be a table_id (evidence/tables/) or a page_id
-      // (evidence/pages/) — census data is sometimes only in prose text,
-      // not in a structured table.
-      const sourceId = (modelCell.source_table_id ?? "").trim();
-
-      // Verify source exists on disk — but only when the model provided a
-      // non-empty source ID.  An empty source_table_id paired with ".."
-      // is a legitimate "value not available" response and must NOT be
-      // flagged as unverified.
-      let sourceVerified = true; // default: no source required
-      if (sourceId) {
-        sourceVerified = false;
-        // Check tables directory first
-        try {
-          await access(path.join(tablesDir, `${sourceId}.json`));
-          sourceVerified = true;
-        } catch {
-          // Not in tables — check pages directory (census data is sometimes
-          // only available as prose text, not in a structured table)
-          try {
-            await access(path.join(pagesDir, `${sourceId}.json`));
-            sourceVerified = true;
-          } catch {
-            // Source file not found in either location
-          }
-        }
+      parsed = JSON.parse(stripped) as ModelSubTableResponse;
+      if (!parsed.cells || typeof parsed.cells !== "object") {
+        throw new Error("Response JSON missing 'cells' object");
       }
+    } catch {
+      anyParseFailed = true;
+      continue; // skip this row/call but continue with others
+    }
 
+    // Verify sources and accumulate cells
+    for (const [cellKey, modelCell] of Object.entries(parsed.cells)) {
+      const sourceId = (modelCell.source_table_id ?? "").trim();
+      const sourceVerified = await verifySource(sourceId, tablesDir, pagesDir);
       const value = parseModelValue(modelCell.value);
 
-      const stored: TmrCell = {
+      storedCells[cellKey] = {
         value,
         unit: (modelCell.unit ?? "").trim() || "unknown",
         sources: [
@@ -618,11 +765,29 @@ export async function generateSubTable(
         human_edited: false,
         ...(!sourceVerified && { unverified_source: true }),
       };
-
-      storedCells[cellKey] = stored;
     }
+  }
 
-    // Populate any expected keys the model missed with ".." (not available)
+  // ── 5. Paths ──────────────────────────────────────────────────────────────
+  const cellsJsonPath = path.join(projectDir, "drafts", "tmr", "_cells.json");
+  const subTableKey = `sub_table_${subTableNumber}`;
+
+  // Complete failure — no cells at all
+  if (anyParseFailed && Object.keys(storedCells).length === 0) {
+    let cellsJson: Record<string, unknown> = {};
+    try {
+      cellsJson = await readJson<Record<string, unknown>>(cellsJsonPath);
+    } catch {
+      // start fresh
+    }
+    cellsJson[subTableKey] = {
+      parse_failed: true,
+      raw_response: "(all row calls failed to parse)",
+      validation_flags: [],
+    };
+    await writeJson(cellsJsonPath, cellsJson);
+  } else {
+    // ── 6. Fill missing expected keys ─────────────────────────────────────
     for (const key of expectedCellKeys) {
       if (!(key in storedCells)) {
         storedCells[key] = {
@@ -637,7 +802,7 @@ export async function generateSubTable(
       }
     }
 
-    // ── 8. Apply unit conversions ─────────────────────────────────────────
+    // ── 7. Apply unit conversions ─────────────────────────────────────────
     for (const cell of Object.values(storedCells)) {
       if (typeof cell.value !== "number") continue;
       const unitLower = cell.unit.toLowerCase().trim();
@@ -651,7 +816,7 @@ export async function generateSubTable(
       }
     }
 
-    // ── 9. Run validation rules ───────────────────────────────────────────
+    // ── 8. Run validation rules ───────────────────────────────────────────
     const validationFlags: ValidationFlag[] = [];
     for (const rule of spec.validation_rules) {
       for (const colLabel of Object.keys(spec.columns)) {
@@ -660,7 +825,7 @@ export async function generateSubTable(
       }
     }
 
-    // ── 10. Write to _cells.json ──────────────────────────────────────────
+    // ── 9. Write to _cells.json ───────────────────────────────────────────
     let cellsJson: Record<string, unknown> = {};
     try {
       cellsJson = await readJson<Record<string, unknown>>(cellsJsonPath);
@@ -670,24 +835,25 @@ export async function generateSubTable(
     cellsJson[subTableKey] = {
       ...storedCells,
       validation_flags: validationFlags,
+      ...(anyParseFailed && { parse_failed: true }),
     };
     await writeJson(cellsJsonPath, cellsJson);
   }
 
-  // ── 11. Append audit event ────────────────────────────────────────────────
+  // ── 10. Append audit event (one per sub-table; token counts aggregated) ───
   const event = {
     type: "generation_completed" as const,
     timestamp: new Date().toISOString(),
     target: "tmr" as const,
     section_or_table: subTableKey,
     prompt_version: PROMPT_VERSION,
-    model: result.model,
-    provider: result.provider,
-    input_tokens: result.inputTokens,
-    output_tokens: result.outputTokens,
-    cost_usd: result.costUsd,
-    wall_time_ms: wallTimeMs,
-    ...(parseFailed && { parse_failed: true }),
+    model: lastModel,
+    provider: lastProvider,
+    input_tokens: inputTokensTotal,
+    output_tokens: outputTokensTotal,
+    cost_usd: costUsdTotal,
+    wall_time_ms: wallTotal,
+    ...(anyParseFailed && { parse_failed: true }),
   };
   await appendAuditEvent(projectDir, event as unknown as AuditEvent);
 }

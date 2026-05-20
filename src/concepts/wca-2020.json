@@ -28,6 +28,352 @@
         "*": "provisional",
         "c": "confidential"
       }
+    },
+    "2": {
+      "title": "Land tenure",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Holdings without land",
+        "Owner",
+        "Owner-cum-tenant",
+        "Tenants",
+        "Other"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Holdings without land + Owner + Owner-cum-tenant + Tenants + Other = Total",
+          "rows": ["Holdings without land", "Owner", "Owner-cum-tenant", "Tenants", "Other"],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "3": {
+      "title": "Land fragmentation",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Holdings without land",
+        "Holdings with land",
+        "1 parcel",
+        "2–3 parcels",
+        "4–5 parcels",
+        "6–9 parcels",
+        "10 parcels and over"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Number of parcels": { "unit": "number of parcels", "type": "integer" }
+      },
+      "validation_rules": [],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "4": {
+      "title": "Distribution by land size classes",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Less than 1 ha",
+        "1–1.99 ha",
+        "2–4.99 ha",
+        "5–9.99 ha",
+        "10–19.99 ha",
+        "20–49.99 ha",
+        "50–99 ha",
+        "100–199 ha",
+        "200–499 ha",
+        "500–999 ha",
+        "1000 ha and over"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "All size class rows sum to Total",
+          "rows": [
+            "Less than 1 ha",
+            "1–1.99 ha",
+            "2–4.99 ha",
+            "5–9.99 ha",
+            "10–19.99 ha",
+            "20–49.99 ha",
+            "50–99 ha",
+            "100–199 ha",
+            "200–499 ha",
+            "500–999 ha",
+            "1000 ha and over"
+          ],
+          "total_row": "Total",
+          "tolerance": 100
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "5": {
+      "title": "Land use",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total",
+        "Land use for agriculture",
+        "Agricultural land",
+        "Arable land",
+        "land under temporary crops",
+        "land under temporary meadows and pastures",
+        "land temporarily fallow",
+        "Land under permanent crops",
+        "Permanent meadows and pastures",
+        "Land under farm buildings and farmyards",
+        "Forest and other wooded land",
+        "Area used for aquaculture",
+        "Other area not elsewhere classified"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "Arable land + Land under permanent crops + Permanent meadows and pastures = Agricultural land",
+          "rows": ["Arable land", "Land under permanent crops", "Permanent meadows and pastures"],
+          "total_row": "Agricultural land"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "6": {
+      "title": "Main purpose of production",
+      "universe": "household sector only",
+      "rows": [
+        "Total",
+        "Producing only for sale",
+        "Producing mainly for sale with some own consumption",
+        "Producing mainly for own consumption with some sale",
+        "Producing only for own consumption"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "All purpose categories sum to Total",
+          "rows": [
+            "Producing only for sale",
+            "Producing mainly for sale with some own consumption",
+            "Producing mainly for own consumption with some sale",
+            "Producing only for own consumption"
+          ],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "7": {
+      "title": "Members of holder's household by sex and age",
+      "universe": "household sector only",
+      "rows": [
+        "Total",
+        "Male",
+        "Female",
+        "Engaged in agricultural activities on the holding",
+        "Male – engaged",
+        "Female – engaged",
+        "aged under 10 years",
+        "Male – under 10",
+        "Female – under 10",
+        "aged 10 to 15 years",
+        "Male – 10 to 15",
+        "Female – 10 to 15",
+        "aged 15 years and over",
+        "Male – 15 and over",
+        "Female – 15 and over"
+      ],
+      "columns": {
+        "Number": { "unit": "number of persons", "type": "integer" }
+      },
+      "validation_rules": [],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "8": {
+      "title": "Sex of agricultural holder",
+      "universe": "household sector only",
+      "rows": [
+        "Holder is an individual – total",
+        "Individual holder – Male",
+        "Individual holder – Female",
+        "More than one co-holder (joint holders) – total",
+        "Co-holders are male only",
+        "Co-holders are female only",
+        "Co-holders are both male and female"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area operated (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "9": {
+      "title": "Holders by sex and age",
+      "universe": "household sector only",
+      "rows": [
+        "Holder is an individual",
+        "Individual – Male",
+        "Individual – Female",
+        "Under 25 years",
+        "Under 25 – Male",
+        "Under 25 – Female",
+        "25–34 years",
+        "25–34 – Male",
+        "25–34 – Female",
+        "35–44 years",
+        "35–44 – Male",
+        "35–44 – Female",
+        "45–54 years",
+        "45–54 – Male",
+        "45–54 – Female",
+        "55–64 years",
+        "55–64 – Male",
+        "55–64 – Female",
+        "65 years and over",
+        "65 and over – Male",
+        "65 and over – Female",
+        "More than one co-holder (joint holders)",
+        "Co-holder – Male",
+        "Co-holder – Female"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" },
+        "Area operated (ha)": { "unit": "hectares", "type": "decimal" }
+      },
+      "validation_rules": [],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "10": {
+      "title": "Holdings by household size",
+      "universe": "household sector only",
+      "rows": [
+        "Total",
+        "1 person",
+        "2–3 persons",
+        "4–5 persons",
+        "6–9 persons",
+        "10 persons and over"
+      ],
+      "columns": {
+        "Holdings": { "unit": "number of holdings", "type": "integer" }
+      },
+      "validation_rules": [
+        {
+          "rule": "sum_to_total",
+          "description": "All household size categories sum to Total",
+          "rows": [
+            "1 person",
+            "2–3 persons",
+            "4–5 persons",
+            "6–9 persons",
+            "10 persons and over"
+          ],
+          "total_row": "Total"
+        }
+      ],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
+    },
+    "11": {
+      "title": "Managers and employees",
+      "universe": "all agricultural holdings",
+      "rows": [
+        "Total managers",
+        "Managers – Male",
+        "Managers – Female",
+        "Individual managers – Male",
+        "Individual managers – Female",
+        "Juridical person managers – Male",
+        "Juridical person managers – Female",
+        "Total employees",
+        "Employees – Male",
+        "Employees – Female",
+        "Individual employees – Male",
+        "Individual employees – Female",
+        "Juridical person employees – Male",
+        "Juridical person employees – Female"
+      ],
+      "columns": {
+        "Number": { "unit": "number of persons", "type": "integer" }
+      },
+      "validation_rules": [],
+      "missing_value_codes": {
+        "..": "not available",
+        "...": "not applicable",
+        "0": "true reported zero",
+        "*": "provisional",
+        "c": "confidential"
+      }
     }
   }
 }
