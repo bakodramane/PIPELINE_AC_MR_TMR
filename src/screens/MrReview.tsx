@@ -30,6 +30,7 @@ interface MrReviewProps {
   projectDir: string;
   projectName: string;
   onBack: () => void;
+  onSwitchToTmr: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
 }
 
@@ -241,6 +242,7 @@ const MrReview: FC<MrReviewProps> = ({
   projectDir,
   projectName,
   onBack,
+  onSwitchToTmr,
   onToast,
 }) => {
   const [sections, setSections] = useState<SectionInfo[]>([]);
@@ -389,6 +391,21 @@ const MrReview: FC<MrReviewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Tab bar — MR / TMR switcher */}
+      <div className="bg-white border-b border-gray-200 px-6">
+        <div className="max-w-4xl mx-auto flex gap-0">
+          <button className="px-4 py-3 text-sm border-b-2 border-[#1B4F23] text-[#1B4F23] font-medium">
+            MR sections
+          </button>
+          <button
+            onClick={onSwitchToTmr}
+            className="px-4 py-3 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 transition-colors"
+          >
+            TMR sub-tables
+          </button>
+        </div>
+      </div>
 
       {/* Status summary bar */}
       {!loadingClaims && sections.length > 0 && (

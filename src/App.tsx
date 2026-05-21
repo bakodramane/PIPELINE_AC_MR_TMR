@@ -1,26 +1,32 @@
 /**
  * AgCensus Compiler — root component.
  *
- * Manages the two-screen state machine:
- *   list     → country project list (Screen 1, default)
- *   mr-review → MR section review for one project (Screen 2)
+ * Manages the four-screen state machine:
+ *   list              → country project list (Screen 1, default)
+ *   project-overview  → per-project hub with metrics and nav tabs
+ *   mr-review         → MR section review for one project
+ *   tmr-review        → TMR sub-table review for one project
  *
- * Also hosts the global toast notification system so either screen can
+ * Also hosts the global toast notification system so any screen can
  * surface messages to the user.
  */
 
 import { useState, useCallback, useEffect } from "react";
 import ProjectList from "./screens/ProjectList";
+import ProjectOverview from "./screens/ProjectOverview";
 import MrReview from "./screens/MrReview";
-import type { ToastMessage } from "./types/ui";
+import TmrReview from "./screens/TmrReview";
+import type { ProjectInfo, ToastMessage } from "./types/ui";
 
 // ---------------------------------------------------------------------------
-// Screen state
+// Screen state machine
 // ---------------------------------------------------------------------------
 
 type Screen =
   | { id: "list" }
-  | { id: "mr-review"; projectDir: string; projectName: string };
+  | { id: "project-overview"; project: ProjectInfo }
+  | { id: "mr-review"; project: ProjectInfo }
+  | { id: "tmr-review"; project: ProjectInfo };
 
 // ---------------------------------------------------------------------------
 // Toast component
@@ -115,7 +121,7 @@ export default function App() {
     (message: string, type: ToastMessage["type"] = "info") => {
       const id = _nextToastId++;
       setToasts((prev) => [...prev, { id, message, type }]);
-      // Auto-dismiss after 5 s (warning / error), 3 s (info / success)
+      // Auto-dismiss: 7 s for error/warning, 3.5 s for info/success
       const delay = type === "error" || type === "warning" ? 7000 : 3500;
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -129,24 +135,68 @@ export default function App() {
     window.scrollTo(0, 0);
   }, [screen]);
 
+  function renderScreen() {
+    switch (screen.id) {
+      case "list":
+        return (
+          <ProjectList
+            onOpenProject={(project) =>
+              setScreen({ id: "project-overview", project })
+            }
+            onToast={addToast}
+          />
+        );
+
+      case "project-overview":
+        return (
+          <ProjectOverview
+            project={screen.project}
+            onBack={() => setScreen({ id: "list" })}
+            onOpenMrReview={() =>
+              setScreen({ id: "mr-review", project: screen.project })
+            }
+            onOpenTmrReview={() =>
+              setScreen({ id: "tmr-review", project: screen.project })
+            }
+            onToast={addToast}
+          />
+        );
+
+      case "mr-review":
+        return (
+          <MrReview
+            projectDir={screen.project.dir}
+            projectName={`${screen.project.manifest.country} ${screen.project.manifest.reference_year}`}
+            onBack={() =>
+              setScreen({ id: "project-overview", project: screen.project })
+            }
+            onSwitchToTmr={() =>
+              setScreen({ id: "tmr-review", project: screen.project })
+            }
+            onToast={addToast}
+          />
+        );
+
+      case "tmr-review":
+        return (
+          <TmrReview
+            projectDir={screen.project.dir}
+            projectName={`${screen.project.manifest.country} ${screen.project.manifest.reference_year}`}
+            onBack={() =>
+              setScreen({ id: "project-overview", project: screen.project })
+            }
+            onSwitchToMr={() =>
+              setScreen({ id: "mr-review", project: screen.project })
+            }
+            onToast={addToast}
+          />
+        );
+    }
+  }
+
   return (
     <>
-      {screen.id === "list" ? (
-        <ProjectList
-          onOpenProject={(dir, name) =>
-            setScreen({ id: "mr-review", projectDir: dir, projectName: name })
-          }
-          onToast={addToast}
-        />
-      ) : (
-        <MrReview
-          projectDir={screen.projectDir}
-          projectName={screen.projectName}
-          onBack={() => setScreen({ id: "list" })}
-          onToast={addToast}
-        />
-      )}
-
+      {renderScreen()}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </>
   );

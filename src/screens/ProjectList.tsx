@@ -15,7 +15,7 @@ import type { ProjectInfo, ToastMessage } from "../types/ui";
 // ---------------------------------------------------------------------------
 
 interface ProjectListProps {
-  onOpenProject: (dir: string, projectName: string) => void;
+  onOpenProject: (project: ProjectInfo) => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
 }
 
@@ -377,12 +377,7 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
                 <ProjectCard
                   key={p.dir}
                   project={p}
-                  onClick={() =>
-                    onOpenProject(
-                      p.dir,
-                      `${p.manifest.country} ${p.manifest.reference_year}`,
-                    )
-                  }
+                  onClick={() => onOpenProject(p)}
                 />
               ))}
             </div>

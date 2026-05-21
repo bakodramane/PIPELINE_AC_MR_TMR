@@ -1,0 +1,759 @@
+/**
+ * Screen — TMR sub-table review.
+ *
+ * Shows all 23 WCA 2020 sub-tables for one country project.
+ * Each sub-table is a card with status badge + populated/total cell count;
+ * clicking expands it to reveal a row × column grid loaded from
+ * drafts/tmr/_cells.json, with validation flags below.
+ *
+ * Cell key convention (mirrors tmr.ts toCellKey):
+ *   "{rowLabel_with_spaces_replaced}_{colLabel_unit_suffix_stripped}"
+ *   e.g. row="Total", col="Area (ha)" → "Total_Area"
+ *        row="Civil persons", col="Holdings" → "Civil_persons_Holdings"
+ *
+ * _cells.json sub-table entries contain:
+ *   - cell entries keyed by canonical cell key
+ *   - validation_flags: ValidationFlagDisplay[]
+ *   - parse_failed?: true
+ *   - truncated?: true
+ *   - raw_response?: string  (on total parse failure)
+ */
+
+import { useState, useEffect, type FC } from "react";
+import { readTextFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
+import type { ToastMessage, SubTableInfo, SubTableStatus, TmrCellDisplay, ValidationFlagDisplay } from "../types/ui";
+import wcaData from "../concepts/wca-2020.json";
+
+// ---------------------------------------------------------------------------
+// WCA 2020 type helpers
+// ---------------------------------------------------------------------------
+
+interface WcaColumnSpec {
+  unit: string;
+  type: "integer" | "decimal";
+}
+
+interface WcaSubTableSpec {
+  title: string;
+  universe: string;
+  rows: readonly string[];
+  columns: Record<string, WcaColumnSpec>;
+  validation_rules: Array<{
+    rule: string;
+    description: string;
+    rows: readonly string[];
+    total_row: string;
+    tolerance?: number;
+  }>;
+  missing_value_codes: Record<string, string>;
+}
+
+const WCA_SUBTABLES = wcaData.sub_tables as Record<string, WcaSubTableSpec>;
+
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+interface TmrReviewProps {
+  projectDir: string;
+  projectName: string;
+  onBack: () => void;
+  onSwitchToMr: () => void;
+  onToast: (msg: string, type: ToastMessage["type"]) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Cell key helper (mirrors tmr.ts toCellKey exactly)
+// ---------------------------------------------------------------------------
+
+function toCellKey(rowLabel: string, colLabel: string): string {
+  const cleanCol = colLabel.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  return `${rowLabel.replace(/\s+/g, "_")}_${cleanCol.replace(/\s+/g, "_")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Missing value code descriptions
+// ---------------------------------------------------------------------------
+
+const MISSING_VALUE_DESCS: Record<string, string> = {
+  "..": "not available",
+  "...": "not applicable",
+  "…": "not applicable",
+  "0": "true reported zero",
+  "*": "provisional",
+  c: "confidential",
+};
+
+function isMissingCode(v: number | string | null): boolean {
+  if (v === null) return true;
+  if (typeof v === "number") return false;
+  return v in MISSING_VALUE_DESCS || v === "";
+}
+
+// ---------------------------------------------------------------------------
+// Sub-table data loader
+// ---------------------------------------------------------------------------
+
+const NON_CELL_KEYS = new Set([
+  "validation_flags",
+  "parse_failed",
+  "truncated",
+  "raw_response",
+]);
+
+function parseSubTableEntry(
+  num: number,
+  rawEntry: Record<string, unknown>,
+  spec: WcaSubTableSpec,
+): SubTableInfo {
+  const parseFailed = rawEntry.parse_failed === true;
+  const truncatedWarning = rawEntry.truncated === true;
+  const totalCells = spec.rows.length * Object.keys(spec.columns).length;
+
+  // Extract validation flags
+  const validationFlags: ValidationFlagDisplay[] = Array.isArray(
+    rawEntry.validation_flags,
+  )
+    ? (rawEntry.validation_flags as ValidationFlagDisplay[])
+    : [];
+
+  // Extract cells (filter out non-cell meta-keys)
+  const cells: Record<string, TmrCellDisplay> = {};
+  for (const [key, val] of Object.entries(rawEntry)) {
+    if (NON_CELL_KEYS.has(key)) continue;
+    if (val === null || typeof val !== "object") continue;
+    const v = val as Record<string, unknown>;
+    if (!("value" in v)) continue;
+    cells[key] = {
+      value: v.value as number | string | null,
+      unit: typeof v.unit === "string" ? v.unit : "",
+      derived: Boolean(v.derived),
+      flags: Array.isArray(v.flags) ? (v.flags as string[]) : [],
+      human_edited: Boolean(v.human_edited),
+      ...(v.unverified_source === true && { unverified_source: true }),
+      ...(typeof v.conversion === "string" && { conversion: v.conversion }),
+    };
+  }
+
+  // Compute status
+  let status: SubTableStatus;
+  if (parseFailed && Object.keys(cells).length === 0) {
+    status = "parse_failed";
+  } else {
+    const populatedCells = Object.values(cells).filter(
+      (c) => typeof c.value === "number",
+    ).length;
+    if (populatedCells === 0) {
+      status = "empty";
+    } else if (populatedCells >= totalCells) {
+      status = "populated";
+    } else {
+      status = "partial";
+    }
+  }
+
+  const populatedCells = Object.values(cells).filter(
+    (c) => typeof c.value === "number",
+  ).length;
+
+  return {
+    number: num,
+    title: spec.title,
+    status,
+    populatedCells,
+    totalCells,
+    validationFlags,
+    truncatedWarning,
+    cells,
+  };
+}
+
+async function loadSubTables(projectDir: string): Promise<SubTableInfo[]> {
+  const cellsPath = [projectDir, "drafts", "tmr", "_cells.json"]
+    .map((p) => p.replace(/[/\\]+$/, ""))
+    .join("/");
+
+  let cellsJson: Record<string, unknown> = {};
+  try {
+    const raw = await readTextFile(cellsPath);
+    cellsJson = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // File absent — all sub-tables will be "not_generated"
+  }
+
+  const result: SubTableInfo[] = [];
+  for (let num = 1; num <= 23; num++) {
+    const spec = WCA_SUBTABLES[String(num)];
+    if (!spec) continue; // shouldn't happen
+
+    const key = `sub_table_${num}`;
+    const rawEntry = cellsJson[key];
+
+    if (!rawEntry || typeof rawEntry !== "object") {
+      result.push({
+        number: num,
+        title: spec.title,
+        status: "not_generated",
+        populatedCells: 0,
+        totalCells: spec.rows.length * Object.keys(spec.columns).length,
+        validationFlags: [],
+        truncatedWarning: false,
+        cells: {},
+      });
+    } else {
+      result.push(
+        parseSubTableEntry(num, rawEntry as Record<string, unknown>, spec),
+      );
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Status badge
+// ---------------------------------------------------------------------------
+
+const STATUS_STYLES: Record<
+  SubTableStatus,
+  { bg: string; text: string; label: string }
+> = {
+  populated: {
+    bg: "bg-green-100 border-green-200",
+    text: "text-green-700",
+    label: "✓ populated",
+  },
+  partial: {
+    bg: "bg-blue-50 border-blue-200",
+    text: "text-blue-700",
+    label: "◑ partial",
+  },
+  empty: {
+    bg: "bg-yellow-50 border-yellow-200",
+    text: "text-yellow-700",
+    label: "○ empty",
+  },
+  parse_failed: {
+    bg: "bg-red-50 border-red-200",
+    text: "text-red-700",
+    label: "✗ failed",
+  },
+  not_generated: {
+    bg: "bg-gray-100 border-gray-200",
+    text: "text-gray-500",
+    label: "— not run",
+  },
+};
+
+function StatusBadge({ status }: { status: SubTableStatus }) {
+  const s = STATUS_STYLES[status];
+  return (
+    <span
+      className={`inline-flex items-center text-[11px] font-medium border px-2 py-0.5 rounded-full ${s.bg} ${s.text}`}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cell value display
+// ---------------------------------------------------------------------------
+
+function CellValue({ cell }: { cell: TmrCellDisplay | undefined }) {
+  if (!cell) {
+    // Expected cell not present at all (shouldn't happen after loadSubTables fills gaps)
+    return (
+      <span className="text-gray-300 text-xs italic">—</span>
+    );
+  }
+
+  const { value, derived, unverified_source, conversion } = cell;
+
+  if (value === null) {
+    return <span className="text-gray-300 text-xs italic">—</span>;
+  }
+
+  if (typeof value === "number") {
+    return (
+      <span
+        className={`text-xs tabular-nums ${
+          unverified_source ? "text-orange-600" : "text-gray-800"
+        } ${derived ? "italic" : ""}`}
+        title={
+          derived && conversion
+            ? conversion
+            : unverified_source
+              ? "Source could not be verified on disk"
+              : undefined
+        }
+      >
+        {value.toLocaleString()}
+        {derived && (
+          <span className="ml-0.5 text-[9px] text-blue-400 align-super">d</span>
+        )}
+        {unverified_source && (
+          <span className="ml-0.5 text-[9px] text-orange-400 align-super">?</span>
+        )}
+      </span>
+    );
+  }
+
+  // Missing value code or string
+  const desc = MISSING_VALUE_DESCS[value];
+  return (
+    <span
+      className="text-gray-400 text-xs italic"
+      title={desc ?? value}
+    >
+      {value}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cell grid (expanded sub-table view)
+// ---------------------------------------------------------------------------
+
+function CellGrid({
+  subTable,
+}: {
+  subTable: SubTableInfo;
+}) {
+  const spec = WCA_SUBTABLES[String(subTable.number)];
+  if (!spec) return null;
+
+  const colLabels = Object.keys(spec.columns);
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left border-collapse text-xs">
+        <thead>
+          <tr className="bg-gray-100">
+            <th className="py-2 px-3 font-medium text-gray-600 text-[11px] border-b border-gray-200 min-w-[180px]">
+              Row
+            </th>
+            {colLabels.map((col) => (
+              <th
+                key={col}
+                className="py-2 px-3 font-medium text-gray-600 text-[11px] border-b border-gray-200 text-right whitespace-nowrap"
+              >
+                {col}
+                <div className="text-[9px] text-gray-400 font-normal">
+                  {spec.columns[col].unit}
+                </div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {spec.rows.map((rowLabel, rowIdx) => (
+            <tr
+              key={rowLabel}
+              className={rowIdx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+            >
+              <td className="py-1.5 px-3 text-gray-700 text-[11px] border-b border-gray-100 font-medium">
+                {rowLabel}
+              </td>
+              {colLabels.map((colLabel) => {
+                const cellKey = toCellKey(rowLabel, colLabel);
+                const cell = subTable.cells[cellKey];
+                const isMissing = !cell || isMissingCode(cell.value);
+                return (
+                  <td
+                    key={colLabel}
+                    className={`py-1.5 px-3 border-b border-gray-100 text-right ${
+                      cell?.unverified_source
+                        ? "border-l-2 border-l-orange-300"
+                        : ""
+                    }`}
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      <CellValue cell={cell} />
+                      {!isMissing && (
+                        <button
+                          onClick={() => {
+                            /* placeholder */
+                          }}
+                          className="text-[9px] text-gray-300 hover:text-gray-500 transition-colors"
+                          title="Edit cell"
+                        >
+                          ✎
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Validation flags */}
+      {subTable.validationFlags.length > 0 && (
+        <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded text-xs">
+          <div className="font-medium text-yellow-800 mb-1">
+            ⚠ Validation failures
+          </div>
+          {subTable.validationFlags.map((flag, i) => (
+            <div key={i} className="text-yellow-700">
+              {flag.rule} · {flag.column}: expected{" "}
+              {flag.expected.toLocaleString()}, got{" "}
+              {flag.actual.toLocaleString()} (Δ {flag.delta.toLocaleString()})
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-gray-400 px-1">
+        <span>
+          <span className="italic">d</span> = derived (unit conversion)
+        </span>
+        <span>
+          <span className="text-orange-400">?</span> = unverified source
+        </span>
+        <span>
+          <span className="italic">..&nbsp;</span>= not available
+        </span>
+        <span>
+          <span className="italic">...&nbsp;</span>= not applicable
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-table card
+// ---------------------------------------------------------------------------
+
+function SubTableCard({
+  subTable,
+  isExpanded,
+  onToggle,
+  onGenerate,
+  onToast,
+}: {
+  subTable: SubTableInfo;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onGenerate: () => void;
+  onToast: (msg: string, type: ToastMessage["type"]) => void;
+}) {
+  const hasContent = subTable.populatedCells > 0;
+
+  return (
+    <div
+      className={`border rounded-lg overflow-hidden transition-shadow ${
+        isExpanded ? "border-blue-400 shadow-sm" : "border-gray-200"
+      }`}
+    >
+      {/* Header row — always visible */}
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-4 py-3 bg-white hover:bg-gray-50 text-left transition-colors"
+      >
+        {/* Sub-table number */}
+        <span className="text-xs font-mono text-gray-400 w-6 shrink-0">
+          T{subTable.number}
+        </span>
+
+        {/* Title */}
+        <span className="flex-1 text-sm font-medium text-gray-800 leading-tight">
+          {subTable.title}
+        </span>
+
+        {/* Status + counts */}
+        <div className="flex items-center gap-2 shrink-0">
+          {subTable.truncatedWarning && (
+            <span
+              className="text-[10px] text-orange-500"
+              title="Model output was truncated"
+            >
+              ⚠
+            </span>
+          )}
+          {subTable.validationFlags.length > 0 && (
+            <span
+              className="text-[10px] text-yellow-600 bg-yellow-50 border border-yellow-200 px-1.5 py-0.5 rounded"
+              title={`${subTable.validationFlags.length} validation flag(s)`}
+            >
+              ⚠ {subTable.validationFlags.length}
+            </span>
+          )}
+          {hasContent && (
+            <span className="text-xs text-gray-400 tabular-nums">
+              {subTable.populatedCells}/{subTable.totalCells}
+            </span>
+          )}
+          <StatusBadge status={subTable.status} />
+          <span className="text-gray-300 ml-1">
+            {isExpanded ? "▲" : "▼"}
+          </span>
+        </div>
+      </button>
+
+      {/* Expanded body */}
+      {isExpanded && (
+        <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
+          {/* Universe note */}
+          {WCA_SUBTABLES[String(subTable.number)] && (
+            <div className="text-[10px] text-gray-400 mb-3">
+              Universe: {WCA_SUBTABLES[String(subTable.number)].universe}
+            </div>
+          )}
+
+          {subTable.status === "not_generated" ? (
+            <p className="text-sm text-gray-400 italic">
+              This sub-table has not been generated yet. Run the CLI script
+              or use the "Generate all sub-tables" button above.
+            </p>
+          ) : subTable.status === "parse_failed" ? (
+            <p className="text-sm text-red-500 italic">
+              JSON parse failed — the model output was truncated or malformed.
+              Check <code className="text-xs">drafts/tmr/_cells.json</code>{" "}
+              for the raw output.
+            </p>
+          ) : (
+            <CellGrid subTable={subTable} />
+          )}
+
+          {/* Action buttons */}
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() =>
+                onToast("Cell editing is coming in a future session.", "info")
+              }
+              className="text-xs text-gray-500 border border-gray-200 rounded px-3 py-1.5 hover:border-gray-300 hover:text-gray-700 transition-colors"
+            >
+              Edit cells
+            </button>
+            <button
+              onClick={onGenerate}
+              className="text-xs text-white bg-blue-600 rounded px-3 py-1.5 hover:bg-blue-700 transition-colors"
+            >
+              ↻ Generate sub-table
+            </button>
+            <button
+              onClick={() =>
+                onToast("Sub-table approved.", "success")
+              }
+              className="text-xs text-white bg-[#1B4F23] rounded px-3 py-1.5 hover:bg-[#163d1c] transition-colors"
+            >
+              ✓ Approve
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main screen
+// ---------------------------------------------------------------------------
+
+const TmrReview: FC<TmrReviewProps> = ({
+  projectDir,
+  projectName,
+  onBack,
+  onSwitchToMr,
+  onToast,
+}) => {
+  const [subTables, setSubTables] = useState<SubTableInfo[]>([]);
+  const [loadingCells, setLoadingCells] = useState(true);
+  const [expandedSubTable, setExpandedSubTable] = useState<number | null>(null);
+  const [generatingAll, setGeneratingAll] = useState(false);
+
+  // ── Load _cells.json ────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoadingCells(true);
+      try {
+        const loaded = await loadSubTables(projectDir);
+        if (!cancelled) {
+          setSubTables(loaded);
+          setLoadingCells(false);
+        }
+      } catch {
+        if (!cancelled) {
+          // loadSubTables handles errors internally; this is a safety net
+          setSubTables([]);
+          setLoadingCells(false);
+        }
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectDir]);
+
+  // ── Generate all sub-tables ─────────────────────────────────────────────
+  async function handleGenerateAll() {
+    setGeneratingAll(true);
+    try {
+      const msg = await invoke<string>("generate_tmr_subtable", {
+        projectDir,
+        subTableNumber: 0, // 0 = all
+        model: "deepseek-v4-flash",
+      });
+      onToast(msg, "info");
+    } catch (err) {
+      onToast(String(err), "warning");
+    } finally {
+      setGeneratingAll(false);
+    }
+  }
+
+  // ── Generate one sub-table ──────────────────────────────────────────────
+  async function handleGenerateOne(subTableNumber: number) {
+    try {
+      const msg = await invoke<string>("generate_tmr_subtable", {
+        projectDir,
+        subTableNumber,
+        model: "deepseek-v4-flash",
+      });
+      onToast(msg, "info");
+    } catch (err) {
+      onToast(String(err), "warning");
+    }
+  }
+
+  // ── Summary counts ───────────────────────────────────────────────────────
+  const populatedCount = subTables.filter(
+    (s) => s.status === "populated",
+  ).length;
+  const partialCount = subTables.filter((s) => s.status === "partial").length;
+  const emptyCount = subTables.filter((s) => s.status === "empty").length;
+  const failedCount = subTables.filter(
+    (s) => s.status === "parse_failed",
+  ).length;
+  const notRunCount = subTables.filter(
+    (s) => s.status === "not_generated",
+  ).length;
+  const totalCellsPopulated = subTables.reduce(
+    (sum, s) => sum + s.populatedCells,
+    0,
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Top bar */}
+      <header className="bg-[#1B4F23] text-white px-6 py-4 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-4xl mx-auto flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="text-green-200 hover:text-white transition-colors text-sm flex items-center gap-1 shrink-0"
+          >
+            ← Back
+          </button>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold leading-tight truncate">
+              {projectName}
+            </div>
+            <div className="text-[10px] text-green-200">
+              Tables of Main Results
+            </div>
+          </div>
+          <button
+            onClick={() => void handleGenerateAll()}
+            disabled={generatingAll}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+              generatingAll
+                ? "border-green-600 text-green-300 cursor-not-allowed"
+                : "border-green-500 text-green-100 hover:bg-white/10 hover:border-green-300"
+            }`}
+          >
+            {generatingAll ? (
+              <>
+                <div className="w-3 h-3 border border-green-300 border-t-transparent rounded-full animate-spin" />
+                Generating…
+              </>
+            ) : (
+              <>↻ Generate all sub-tables</>
+            )}
+          </button>
+        </div>
+      </header>
+
+      {/* Tab bar — MR / TMR switcher */}
+      <div className="bg-white border-b border-gray-200 px-6">
+        <div className="max-w-4xl mx-auto flex gap-0">
+          <button
+            onClick={onSwitchToMr}
+            className="px-4 py-3 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 transition-colors"
+          >
+            MR sections
+          </button>
+          <button className="px-4 py-3 text-sm border-b-2 border-blue-500 text-blue-600 font-medium">
+            TMR sub-tables
+          </button>
+        </div>
+      </div>
+
+      {/* Status summary bar */}
+      {!loadingCells && subTables.length > 0 && (
+        <div className="bg-white border-b border-gray-200 px-6 py-2">
+          <div className="max-w-4xl mx-auto flex items-center gap-4 text-xs flex-wrap">
+            <span className="text-gray-500">TMR sub-tables:</span>
+            {populatedCount > 0 && (
+              <span className="text-green-600 font-medium">
+                {populatedCount} populated
+              </span>
+            )}
+            {partialCount > 0 && (
+              <span className="text-blue-600">{partialCount} partial</span>
+            )}
+            {emptyCount > 0 && (
+              <span className="text-yellow-600">{emptyCount} empty</span>
+            )}
+            {failedCount > 0 && (
+              <span className="text-red-600">{failedCount} failed</span>
+            )}
+            {notRunCount > 0 && (
+              <span className="text-gray-400">{notRunCount} not run</span>
+            )}
+            <span className="text-gray-300">·</span>
+            <span className="text-gray-500">
+              {totalCellsPopulated.toLocaleString()} cells populated
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-table list */}
+      <main className="max-w-4xl mx-auto px-6 py-6">
+        {loadingCells ? (
+          <div className="flex items-center justify-center py-24">
+            <div className="w-8 h-8 border-2 border-gray-200 border-t-[#1B4F23] rounded-full animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {subTables.map((st) => (
+              <SubTableCard
+                key={st.number}
+                subTable={st}
+                isExpanded={expandedSubTable === st.number}
+                onToggle={() =>
+                  setExpandedSubTable(
+                    expandedSubTable === st.number ? null : st.number,
+                  )
+                }
+                onGenerate={() => void handleGenerateOne(st.number)}
+                onToast={onToast}
+              />
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default TmrReview;

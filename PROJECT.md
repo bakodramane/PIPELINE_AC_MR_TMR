@@ -487,3 +487,83 @@ safely skipped by the object-walk cast pattern above.
 NEXT SESSION: Re-run full Pakistan pipeline with updated token budgets and keyword
 coverage. Verify Pakistan §1 now correctly cites 1960. Session 14 will wire the
 "Generate all sections" button to a real sidecar invocation.
+
+
+## Session 13 — TMR cell review screen + Project overview screen
+
+**Files created:**
+- `src/screens/TmrReview.tsx` — Screen 3: 23 WCA 2020 sub-table cards with expandable cell
+  grids. Per-card status badge (populated/partial/empty/parse_failed/not_generated), cell
+  count, validation flag count. Expanded view shows a row × column table with numeric
+  values, missing-value codes (grey italic with tooltip), derived flag ("d" superscript),
+  unverified-source flag ("?" superscript + orange left border), and validation failure
+  rows below the table. "Generate sub-table" + "Generate all sub-tables" buttons (both
+  call `generate_tmr_subtable` Rust command which returns Ok("queued")).
+- `src/screens/ProjectOverview.tsx` — Hub screen between project list and detail views.
+  Four metric cards (Sources indexed, MR sections, TMR cells filled, Open issues).
+  Two side-by-side generator panels (MR draft, TMR draft) with status summary and
+  "Open review" / "Generate all" buttons. Navigation tab row (MR draft, TMR draft,
+  Sources, Issues, Audit log — last three are placeholder toasts for now).
+
+**Files modified:**
+- `src/types/ui.ts` — added `SubTableStatus`, `TmrCellDisplay`, `ValidationFlagDisplay`,
+  `SubTableInfo`; added `tmrCellsOk: number` and `tmrCellsTotal: number` to `ProjectInfo`;
+  added `TMR_CELLS_TOTAL = 388` constant
+- `src/hooks/useProjects.ts` — updated `computeTmrStatus` to also count individual
+  populated cells (not just sub-tables); returns `cellsOk` and `cellsTotal`; removed
+  `CellsJson` import (using `Record<string, unknown>` cast instead)
+- `src/screens/MrReview.tsx` — added `onSwitchToTmr: () => void` prop; added MR/TMR tab
+  bar below the top header bar for switching between MR sections and TMR sub-tables
+- `src/screens/ProjectList.tsx` — changed `onOpenProject(dir, name)` to
+  `onOpenProject(project: ProjectInfo)` so the full project data flows to App.tsx
+- `src/App.tsx` — complete rewrite: four-screen state machine
+  `list → project-overview → mr-review / tmr-review`; all screens carry `project:
+  ProjectInfo` so back-navigation can reconstruct project-overview without a re-fetch
+- `src-tauri/src/lib.rs` — added `generate_tmr_subtable(project_dir, sub_table_number,
+  model)` command; sub_table_number=0 means "all sub-tables"; returns `Ok("queued")`
+  (real wiring deferred to Session 14)
+
+**Build status:**
+- `npx tsc --noEmit` → no output (zero errors)
+- `npm run tauri:dev` → Rust compiled in 8.46 s (crates already cached), app launched
+
+---
+
+## Session 13 notes
+
+CELL KEY CONVENTION: The cell key format in `_cells.json` is `toCellKey(row, col)`:
+  `{rowLabel_spaces→underscores}_{colLabel_unit-suffix-stripped_spaces→underscores}`
+  e.g. row="Total", col="Area (ha)" → "Total_Area"
+       row="Civil persons", col="Holdings" → "Civil_persons_Holdings"
+This function is replicated in TmrReview.tsx for the grid lookup. Keep both in sync.
+
+NON-CELL KEYS IN _cells.json: Each sub-table entry in `_cells.json` contains mixed keys:
+  - Cell entries: objects with `value`, `unit`, `sources`, etc.
+  - `validation_flags`: ValidationFlag[] array
+  - `parse_failed`: boolean (true on complete generation failure)
+  - `truncated`: boolean (true when finishReason === 'length')
+  - `raw_response`: string (on total parse failure)
+The frontend filters these out by checking for the `value` property on each entry.
+Constant `NON_CELL_KEYS = Set(["validation_flags", "parse_failed", "truncated", "raw_response"])`.
+
+TMR_CELLS_TOTAL = 388: Derived from summing rows × columns for all 23 WCA sub-tables.
+Hardcoded in `src/types/ui.ts` to avoid importing wca-2020.json in the hook.
+Breakdown in comments in ui.ts. Update if sub-tables are ever added to wca-2020.json.
+
+WCA JSON IMPORT: `wcaData from "../concepts/wca-2020.json"` works in the frontend because
+`tsconfig.json` has `resolveJsonModule: true`. The type is cast locally in TmrReview.tsx
+to `Record<string, WcaSubTableSpec>` to allow dynamic access by sub-table number.
+
+FOUR-SCREEN NAVIGATION: Screen type carries `project: ProjectInfo` in all non-list states.
+This means back-navigation to project-overview doesn't need a re-fetch. The project data
+shown in the overview is the snapshot loaded when the user clicked the project card — it
+won't auto-update if files change on disk. Use the "Refresh" button in the project list
+to reload project data.
+
+GENERATE TMR SUBTABLE: sub_table_number=0 means "all" in the Rust command. This avoids
+needing a separate `generate_all_tmr` command. Session 14 will replace the placeholder
+with real sidecar invocation.
+
+NEXT SESSION (14): Wire `generate_mr_sections` and `generate_tmr_subtable` to actual
+Node.js generation via Tauri sidecar or shell_execute. Consider running generation in
+a background thread with progress events streamed back via Tauri events.

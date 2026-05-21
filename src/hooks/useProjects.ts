@@ -14,11 +14,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { readDir, readTextFile, exists } from "@tauri-apps/plugin-fs";
 import { homeDir } from "@tauri-apps/api/path";
-import type { Manifest, ClaimsJson, CellsJson } from "../project/schema";
+import type { Manifest, ClaimsJson } from "../project/schema";
 import {
   type ProjectInfo,
   MR_SECTIONS_TOTAL,
   TMR_SUBTABLES_TOTAL,
+  TMR_CELLS_TOTAL,
 } from "../types/ui";
 
 // ---------------------------------------------------------------------------
@@ -67,31 +68,50 @@ async function computeMrStatus(
   }
 }
 
-async function computeTmrStatus(
-  projectDir: string,
-): Promise<{ ok: number; total: number }> {
+async function computeTmrStatus(projectDir: string): Promise<{
+  subTablesOk: number;
+  subTablesTotal: number;
+  cellsOk: number;
+  cellsTotal: number;
+}> {
   const cellsPath = joinPath(projectDir, "drafts", "tmr", "_cells.json");
   try {
     const raw = await readTextFile(cellsPath);
-    const cells = JSON.parse(raw) as CellsJson;
-    let ok = 0;
+    // _cells.json sub-table entries mix Cell objects with validation_flags,
+    // parse_failed, truncated keys — use Record<string, unknown> for safety.
+    const cellsJson = JSON.parse(raw) as Record<string, unknown>;
+    let subTablesOk = 0;
+    let cellsOk = 0;
+
     for (let t = 1; t <= TMR_SUBTABLES_TOTAL; t++) {
-      const subTable = cells[`sub_table_${t}`];
-      if (!subTable) continue;
-      // Count as "ok" if at least one cell has a numeric value.
-      // Cast through unknown because _cells.json also has validation_flags,
-      // parse_failed, truncated keys that don't conform to the Cell schema type.
-      const hasNumber = Object.values(subTable as Record<string, unknown>).some(
-        (v): boolean => {
-          if (v === null || typeof v !== "object") return false;
-          return typeof (v as { value?: unknown }).value === "number";
-        },
-      );
-      if (hasNumber) ok++;
+      const subTable = cellsJson[`sub_table_${t}`];
+      if (!subTable || typeof subTable !== "object") continue;
+
+      let hasNumber = false;
+      for (const v of Object.values(subTable as Record<string, unknown>)) {
+        if (v === null || typeof v !== "object") continue;
+        const cellVal = (v as { value?: unknown }).value;
+        if (typeof cellVal === "number") {
+          hasNumber = true;
+          cellsOk++;
+        }
+      }
+      if (hasNumber) subTablesOk++;
     }
-    return { ok, total: TMR_SUBTABLES_TOTAL };
+
+    return {
+      subTablesOk,
+      subTablesTotal: TMR_SUBTABLES_TOTAL,
+      cellsOk,
+      cellsTotal: TMR_CELLS_TOTAL,
+    };
   } catch {
-    return { ok: 0, total: TMR_SUBTABLES_TOTAL };
+    return {
+      subTablesOk: 0,
+      subTablesTotal: TMR_SUBTABLES_TOTAL,
+      cellsOk: 0,
+      cellsTotal: TMR_CELLS_TOTAL,
+    };
   }
 }
 
@@ -114,8 +134,10 @@ async function loadProject(
       manifest,
       mrSectionsOk: mr.ok,
       mrSectionsTotal: mr.total,
-      tmrSubTablesOk: tmr.ok,
-      tmrSubTablesTotal: tmr.total,
+      tmrSubTablesOk: tmr.subTablesOk,
+      tmrSubTablesTotal: tmr.subTablesTotal,
+      tmrCellsOk: tmr.cellsOk,
+      tmrCellsTotal: tmr.cellsTotal,
       lastModified: manifest.compiled_at,
     };
   } catch {
