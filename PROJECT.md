@@ -420,3 +420,70 @@ NEXT SESSION: Re-run full Pakistan pipeline (15 MR + 23 TMR) against
 both main-report.pdf AND 02-statistical-tables.pdf to measure improvement.
 Expected: ST1/ST2 fully populated, ST3/ST17 parse failures resolved,
 Pakistan §1 first-census-year corrected to 1960.
+
+
+## Session 12 — Tauri frontend (two screens)
+
+**Files created/modified:**
+- `src-tauri/Cargo.toml` — added `tauri-plugin-fs = "2"` to `[dependencies]`
+- `src-tauri/src/lib.rs` — complete rewrite:
+  - Registers `tauri_plugin_fs::init()` for sandboxed FS access from the webview
+  - Exposes `generate_mr_sections(project_dir, model)` Tauri command (currently returns
+    informative error pointing to CLI scripts; real wiring deferred to Session 14)
+- `src-tauri/capabilities/default.json` — added FS read permissions:
+  ```json
+  { "identifier": "fs:allow-read-text-file", "allow": [{ "path": "$HOME/**" }] }
+  { "identifier": "fs:allow-read-dir",       "allow": [{ "path": "$HOME/**" }] }
+  { "identifier": "fs:allow-exists",         "allow": [{ "path": "$HOME/**" }] }
+  ```
+- `package.json` — added `@tauri-apps/plugin-fs: ^2.5.1` (npm install)
+- `src/types/ui.ts` — shared UI types: `ProjectInfo`, `SectionInfo`, `SectionStatus`,
+  `ToastMessage`, `MR_SECTION_TITLES`, `MR_SECTIONS_TOTAL = 15`, `TMR_SUBTABLES_TOTAL = 23`
+- `src/hooks/useProjects.ts` — React hook that reads project base dir, lists country
+  subdirectories, loads `manifest.json` + MR/TMR progress counts per project; persists
+  base dir in `localStorage`; default path `~/Documents/AgCensus`
+- `src/screens/ProjectList.tsx` — Screen 1: project grid with status bars, folder picker,
+  refresh, placeholder "New project" and "Import bundle" buttons
+- `src/screens/MrReview.tsx` — Screen 2: 15 collapsible MR section cards showing claims
+  from `_claims.json`, source badges, deviation flags, truncation warnings; "Generate all
+  sections" button with spinner; "Edit" and "Approve" per-section action buttons
+- `src/App.tsx` — complete rewrite: two-screen state machine (list / mr-review), global
+  toast notification system (auto-dismiss 3.5 s info/success, 7 s error/warning)
+
+**Tauri build status:**
+- `npm run tauri:dev` succeeded: Vite started on port 1420, Rust compiled cleanly in ~60 s
+  (`tauri-plugin-fs v2.5.1` and `tauri-plugin v2.6.2` downloaded and compiled)
+- `agcensus-compiler.exe` launched without errors
+
+---
+
+## Session 12 notes
+
+TWO-SCREEN STATE MACHINE: No router. `type Screen = {id:'list'} | {id:'mr-review', projectDir, projectName}`.
+Navigation via `setScreen()`. `window.scrollTo(0,0)` on each screen change.
+
+GENERATE BUTTON: Real generation requires spawning Node.js from Rust (sidecar pattern).
+Decision: Rust command returns informative error pointing to CLI scripts; shown as warning
+toast. UI still shows correct spinner/disable behaviour while invoke is pending.
+Wire up actual generation in Session 14.
+
+TYPESCRIPT STRICT MODE FIX (useProjects.ts TMR status):
+`_cells.json` sub-table entries mix `Cell` objects with `validation_flags`, `parse_failed`,
+`truncated` keys that don't conform to the Cell schema. Cast through
+`subTable as Record<string, unknown>` then `(v as {value?: unknown}).value` to check for
+numeric values without triggering TS2352 overlap errors.
+
+NODE.JS / WEBVIEW ISOLATION: `src/project/io.ts` uses `node:fs/promises` and CANNOT be
+imported in frontend code. Always import types from `schema.ts` (safe); use
+`@tauri-apps/plugin-fs` for any FS access inside the webview.
+
+MR STATUS IN PROJECT CARDS: Counts `section_N` keys with `claims.length > 0` from
+`_claims.json`. A section with `claims.length === 0` counts as empty (not ok).
+
+TMR STATUS IN PROJECT CARDS: Counts `sub_table_N` keys with at least one cell having
+`{value: number}` (not `".."` or `null`). Non-cell keys in the sub-table entry are
+safely skipped by the object-walk cast pattern above.
+
+NEXT SESSION: Re-run full Pakistan pipeline with updated token budgets and keyword
+coverage. Verify Pakistan §1 now correctly cites 1960. Session 14 will wire the
+"Generate all sections" button to a real sidecar invocation.
