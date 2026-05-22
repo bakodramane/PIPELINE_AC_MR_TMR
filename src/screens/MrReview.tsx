@@ -1,18 +1,20 @@
 /**
- * Screen 2 — MR section review.
+ * Screen — MR section review.
  *
  * Shows all 15 Metadata Review sections for one country project.
  * Each section is a card with status badge + claim count; clicking expands
  * it to reveal the claims (evidence-backed prose sentences) and source refs.
  *
- * The "Generate all sections" button calls the Tauri `generate_mr_sections`
- * command — currently returns a user-friendly message pointing to the CLI
- * scripts (real wiring in Session 14).
+ * Session 14: "Generate all sections" now calls the real Tauri
+ * `generate_mr_sections` command via the shell plugin.  Progress events
+ * ("generation-progress") stream back from Rust and each completed section
+ * is reloaded from disk without a full-page refresh.
  */
 
-import { useState, useEffect, type FC } from "react";
+import { useState, useEffect, useCallback, type FC } from "react";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { ClaimsJson, Claim } from "../project/schema";
 import {
   type SectionInfo,
@@ -32,6 +34,17 @@ interface MrReviewProps {
   onBack: () => void;
   onSwitchToTmr: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Event payload (mirrors Rust GenerationProgressPayload)
+// ---------------------------------------------------------------------------
+
+interface GenerationProgressPayload {
+  type: string;   // "mr" | "tmr"
+  number: number;
+  status: string; // "done" | "error"
+  message?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,17 +164,12 @@ function SectionCard({
         onClick={onToggle}
         className="w-full flex items-center gap-3 px-4 py-3 bg-white hover:bg-gray-50 text-left transition-colors"
       >
-        {/* Section number */}
         <span className="text-xs font-mono text-gray-400 w-5 shrink-0">
           §{section.number}
         </span>
-
-        {/* Title */}
         <span className="flex-1 text-sm font-medium text-gray-800 leading-tight">
           {section.title}
         </span>
-
-        {/* Status + count */}
         <div className="flex items-center gap-2 shrink-0">
           {section.truncatedWarning && (
             <span
@@ -188,8 +196,8 @@ function SectionCard({
         <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
           {section.status === "not_generated" ? (
             <p className="text-sm text-gray-400 italic">
-              This section has not been generated yet. Run the CLI script or use
-              the "Generate all sections" button above.
+              This section has not been generated yet. Use the "Generate all
+              sections" button above.
             </p>
           ) : section.status === "empty" ? (
             <p className="text-sm text-gray-400 italic">
@@ -211,11 +219,10 @@ function SectionCard({
             </div>
           )}
 
-          {/* Action buttons */}
           <div className="mt-3 flex gap-2">
             <button
               onClick={() =>
-                onToast("Claim editing is coming in Session 13.", "info")
+                onToast("Claim editing is coming in a future session.", "info")
               }
               className="text-xs text-gray-500 border border-gray-200 rounded px-3 py-1.5 hover:border-gray-300 hover:text-gray-700 transition-colors"
             >
@@ -249,74 +256,69 @@ const MrReview: FC<MrReviewProps> = ({
   const [loadingClaims, setLoadingClaims] = useState(true);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [genProgress, setGenProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
 
-  // ── Load _claims.json ────────────────────────────────────────────────────
+  // ── Load _claims.json ─────────────────────────────────────────────────────
+
+  function buildSections(allClaims: ClaimsJson): SectionInfo[] {
+    return Array.from({ length: MR_SECTIONS_TOTAL }, (_, idx) => {
+      const num = idx + 1;
+      const key = `section_${num}`;
+      const sectionData = allClaims[key] as
+        | (ClaimsJson[string] & { truncated_warning?: boolean })
+        | undefined;
+
+      let status: SectionStatus;
+      let claims: Claim[] = [];
+      let truncatedWarning = false;
+
+      if (!sectionData) {
+        status = "not_generated";
+      } else {
+        claims = sectionData.claims;
+        truncatedWarning = sectionData.truncated_warning === true;
+        status = claims.length > 0 ? "ok" : "empty";
+      }
+
+      return {
+        number: num,
+        title: MR_SECTION_TITLES[num] ?? `Section ${num}`,
+        status,
+        claimCount: claims.length,
+        claims,
+        truncatedWarning,
+      };
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       setLoadingClaims(true);
       try {
-        const claimsPath = joinPath(
-          projectDir,
-          "drafts",
-          "mr",
-          "_claims.json",
-        );
+        const claimsPath = joinPath(projectDir, "drafts", "mr", "_claims.json");
         const raw = await readTextFile(claimsPath);
         const allClaims = JSON.parse(raw) as ClaimsJson;
-
-        const loaded: SectionInfo[] = Array.from(
-          { length: MR_SECTIONS_TOTAL },
-          (_, idx) => {
-            const num = idx + 1;
-            const key = `section_${num}`;
-            const sectionData = allClaims[key] as
-              | (ClaimsJson[string] & { truncated_warning?: boolean })
-              | undefined;
-
-            let status: SectionStatus;
-            let claims: Claim[] = [];
-            let truncatedWarning = false;
-
-            if (!sectionData) {
-              status = "not_generated";
-            } else {
-              claims = sectionData.claims;
-              truncatedWarning = sectionData.truncated_warning === true;
-              status = claims.length > 0 ? "ok" : "empty";
-            }
-
-            return {
-              number: num,
-              title: MR_SECTION_TITLES[num] ?? `Section ${num}`,
-              status,
-              claimCount: claims.length,
-              claims,
-              truncatedWarning,
-            };
-          },
-        );
-
         if (!cancelled) {
-          setSections(loaded);
+          setSections(buildSections(allClaims));
           setLoadingClaims(false);
         }
       } catch {
         if (!cancelled) {
-          // File may not exist yet — show all sections as not_generated
-          const empty: SectionInfo[] = Array.from(
-            { length: MR_SECTIONS_TOTAL },
-            (_, idx) => ({
+          setSections(
+            Array.from({ length: MR_SECTIONS_TOTAL }, (_, idx) => ({
               number: idx + 1,
               title: MR_SECTION_TITLES[idx + 1] ?? `Section ${idx + 1}`,
               status: "not_generated" as SectionStatus,
               claimCount: 0,
               claims: [],
               truncatedWarning: false,
-            }),
+            })),
           );
-          setSections(empty);
           setLoadingClaims(false);
         }
       }
@@ -328,29 +330,102 @@ const MrReview: FC<MrReviewProps> = ({
     };
   }, [projectDir]);
 
-  // ── Generate all sections ────────────────────────────────────────────────
+  // ── Reload a single section from disk after generation ───────────────────
+
+  const reloadSection = useCallback(
+    async (n: number) => {
+      try {
+        const claimsPath = joinPath(projectDir, "drafts", "mr", "_claims.json");
+        const raw = await readTextFile(claimsPath);
+        const allClaims = JSON.parse(raw) as ClaimsJson;
+        const key = `section_${n}`;
+        const sectionData = allClaims[key] as
+          | (ClaimsJson[string] & { truncated_warning?: boolean })
+          | undefined;
+
+        let status: SectionStatus;
+        let claims: Claim[] = [];
+        let truncatedWarning = false;
+
+        if (!sectionData) {
+          status = "not_generated";
+        } else {
+          claims = sectionData.claims;
+          truncatedWarning = sectionData.truncated_warning === true;
+          status = claims.length > 0 ? "ok" : "empty";
+        }
+
+        setSections((prev) =>
+          prev.map((s) =>
+            s.number === n
+              ? {
+                  number: n,
+                  title: MR_SECTION_TITLES[n] ?? `Section ${n}`,
+                  status,
+                  claimCount: claims.length,
+                  claims,
+                  truncatedWarning,
+                }
+              : s,
+          ),
+        );
+      } catch {
+        // Reload failed — leave existing state
+      }
+    },
+    [projectDir],
+  );
+
+  // ── Generate all sections ─────────────────────────────────────────────────
+
   async function handleGenerateAll() {
     setGenerating(true);
+    setGenProgress({ done: 0, total: MR_SECTIONS_TOTAL });
+
+    // Set up listener BEFORE invoking so no events are missed
+    const unlisten = await listen<GenerationProgressPayload>(
+      "generation-progress",
+      (event) => {
+        const { type, number, status, message } = event.payload;
+        if (type !== "mr") return;
+
+        if (status === "done") {
+          void reloadSection(number);
+        } else {
+          onToast(
+            `§${number} failed: ${message ?? "unknown error"}`,
+            "error",
+          );
+        }
+        setGenProgress((prev) =>
+          prev ? { ...prev, done: prev.done + 1 } : null,
+        );
+      },
+    );
+
     try {
-      await invoke<string>("generate_mr_sections", {
+      const result = await invoke<string>("generate_mr_sections", {
         projectDir,
         model: "deepseek-v4-flash",
       });
-      onToast("Generation complete — reloading sections.", "success");
-      // Trigger re-load by re-mounting (simplest approach for now)
-      setLoadingClaims(true);
+      onToast(`Generation complete — ${result}.`, "success");
     } catch (err) {
-      onToast(String(err), "warning");
+      onToast(String(err), "error");
     } finally {
+      unlisten();
       setGenerating(false);
+      setGenProgress(null);
     }
   }
 
-  // ── Summary counts ───────────────────────────────────────────────────────
+  // ── Summary counts ────────────────────────────────────────────────────────
+
   const okCount = sections.filter((s) => s.status === "ok").length;
   const emptyCount = sections.filter((s) => s.status === "empty").length;
   const failedCount = sections.filter((s) => s.status === "parse_failed").length;
   const notRunCount = sections.filter((s) => s.status === "not_generated").length;
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -391,6 +466,30 @@ const MrReview: FC<MrReviewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Generation progress bar */}
+      {generating && genProgress && (
+        <div className="bg-[#1B4F23]/5 border-b border-[#1B4F23]/20 px-6 py-2">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center justify-between text-xs text-gray-600 mb-1.5">
+              <span>Generating MR sections…</span>
+              <span className="font-medium tabular-nums">
+                {genProgress.done} / {genProgress.total}
+              </span>
+            </div>
+            <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[#1B4F23] rounded-full transition-all duration-300"
+                style={{
+                  width: `${Math.round(
+                    (genProgress.done / genProgress.total) * 100,
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tab bar — MR / TMR switcher */}
       <div className="bg-white border-b border-gray-200 px-6">

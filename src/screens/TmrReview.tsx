@@ -11,18 +11,22 @@
  *   e.g. row="Total", col="Area (ha)" → "Total_Area"
  *        row="Civil persons", col="Holdings" → "Civil_persons_Holdings"
  *
- * _cells.json sub-table entries contain:
- *   - cell entries keyed by canonical cell key
- *   - validation_flags: ValidationFlagDisplay[]
- *   - parse_failed?: true
- *   - truncated?: true
- *   - raw_response?: string  (on total parse failure)
+ * Session 14: "Generate all" and per-subtable "Generate" buttons now call
+ * the real Tauri `generate_tmr_subtable` command.  Progress events stream
+ * back from Rust and each completed subtable reloads from disk in place.
  */
 
-import { useState, useEffect, type FC } from "react";
+import { useState, useEffect, useCallback, type FC } from "react";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
-import type { ToastMessage, SubTableInfo, SubTableStatus, TmrCellDisplay, ValidationFlagDisplay } from "../types/ui";
+import { listen } from "@tauri-apps/api/event";
+import type {
+  ToastMessage,
+  SubTableInfo,
+  SubTableStatus,
+  TmrCellDisplay,
+  ValidationFlagDisplay,
+} from "../types/ui";
 import wcaData from "../concepts/wca-2020.json";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +65,17 @@ interface TmrReviewProps {
   onBack: () => void;
   onSwitchToMr: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Event payload (mirrors Rust GenerationProgressPayload)
+// ---------------------------------------------------------------------------
+
+interface GenerationProgressPayload {
+  type: string;   // "mr" | "tmr"
+  number: number;
+  status: string; // "done" | "error"
+  message?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,14 +126,12 @@ function parseSubTableEntry(
   const truncatedWarning = rawEntry.truncated === true;
   const totalCells = spec.rows.length * Object.keys(spec.columns).length;
 
-  // Extract validation flags
   const validationFlags: ValidationFlagDisplay[] = Array.isArray(
     rawEntry.validation_flags,
   )
     ? (rawEntry.validation_flags as ValidationFlagDisplay[])
     : [];
 
-  // Extract cells (filter out non-cell meta-keys)
   const cells: Record<string, TmrCellDisplay> = {};
   for (const [key, val] of Object.entries(rawEntry)) {
     if (NON_CELL_KEYS.has(key)) continue;
@@ -136,7 +149,6 @@ function parseSubTableEntry(
     };
   }
 
-  // Compute status
   let status: SubTableStatus;
   if (parseFailed && Object.keys(cells).length === 0) {
     status = "parse_failed";
@@ -185,7 +197,7 @@ async function loadSubTables(projectDir: string): Promise<SubTableInfo[]> {
   const result: SubTableInfo[] = [];
   for (let num = 1; num <= 23; num++) {
     const spec = WCA_SUBTABLES[String(num)];
-    if (!spec) continue; // shouldn't happen
+    if (!spec) continue;
 
     const key = `sub_table_${num}`;
     const rawEntry = cellsJson[key];
@@ -262,10 +274,7 @@ function StatusBadge({ status }: { status: SubTableStatus }) {
 
 function CellValue({ cell }: { cell: TmrCellDisplay | undefined }) {
   if (!cell) {
-    // Expected cell not present at all (shouldn't happen after loadSubTables fills gaps)
-    return (
-      <span className="text-gray-300 text-xs italic">—</span>
-    );
+    return <span className="text-gray-300 text-xs italic">—</span>;
   }
 
   const { value, derived, unverified_source, conversion } = cell;
@@ -284,8 +293,8 @@ function CellValue({ cell }: { cell: TmrCellDisplay | undefined }) {
           derived && conversion
             ? conversion
             : unverified_source
-              ? "Source could not be verified on disk"
-              : undefined
+            ? "Source could not be verified on disk"
+            : undefined
         }
       >
         {value.toLocaleString()}
@@ -299,13 +308,9 @@ function CellValue({ cell }: { cell: TmrCellDisplay | undefined }) {
     );
   }
 
-  // Missing value code or string
   const desc = MISSING_VALUE_DESCS[value];
   return (
-    <span
-      className="text-gray-400 text-xs italic"
-      title={desc ?? value}
-    >
+    <span className="text-gray-400 text-xs italic" title={desc ?? value}>
       {value}
     </span>
   );
@@ -315,11 +320,7 @@ function CellValue({ cell }: { cell: TmrCellDisplay | undefined }) {
 // Cell grid (expanded sub-table view)
 // ---------------------------------------------------------------------------
 
-function CellGrid({
-  subTable,
-}: {
-  subTable: SubTableInfo;
-}) {
+function CellGrid({ subTable }: { subTable: SubTableInfo }) {
   const spec = WCA_SUBTABLES[String(subTable.number)];
   if (!spec) return null;
 
@@ -432,12 +433,14 @@ function CellGrid({
 function SubTableCard({
   subTable,
   isExpanded,
+  isGenerating,
   onToggle,
   onGenerate,
   onToast,
 }: {
   subTable: SubTableInfo;
   isExpanded: boolean;
+  isGenerating: boolean;
   onToggle: () => void;
   onGenerate: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
@@ -455,18 +458,19 @@ function SubTableCard({
         onClick={onToggle}
         className="w-full flex items-center gap-3 px-4 py-3 bg-white hover:bg-gray-50 text-left transition-colors"
       >
-        {/* Sub-table number */}
         <span className="text-xs font-mono text-gray-400 w-6 shrink-0">
           T{subTable.number}
         </span>
-
-        {/* Title */}
         <span className="flex-1 text-sm font-medium text-gray-800 leading-tight">
           {subTable.title}
         </span>
-
-        {/* Status + counts */}
         <div className="flex items-center gap-2 shrink-0">
+          {isGenerating && (
+            <div
+              className="w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin"
+              title="Generating…"
+            />
+          )}
           {subTable.truncatedWarning && (
             <span
               className="text-[10px] text-orange-500"
@@ -498,7 +502,6 @@ function SubTableCard({
       {/* Expanded body */}
       {isExpanded && (
         <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
-          {/* Universe note */}
           {WCA_SUBTABLES[String(subTable.number)] && (
             <div className="text-[10px] text-gray-400 mb-3">
               Universe: {WCA_SUBTABLES[String(subTable.number)].universe}
@@ -507,8 +510,8 @@ function SubTableCard({
 
           {subTable.status === "not_generated" ? (
             <p className="text-sm text-gray-400 italic">
-              This sub-table has not been generated yet. Run the CLI script
-              or use the "Generate all sub-tables" button above.
+              This sub-table has not been generated yet. Use the "Generate all
+              sub-tables" button above or click "Generate sub-table" below.
             </p>
           ) : subTable.status === "parse_failed" ? (
             <p className="text-sm text-red-500 italic">
@@ -520,7 +523,6 @@ function SubTableCard({
             <CellGrid subTable={subTable} />
           )}
 
-          {/* Action buttons */}
           <div className="mt-3 flex gap-2">
             <button
               onClick={() =>
@@ -532,14 +534,24 @@ function SubTableCard({
             </button>
             <button
               onClick={onGenerate}
-              className="text-xs text-white bg-blue-600 rounded px-3 py-1.5 hover:bg-blue-700 transition-colors"
+              disabled={isGenerating}
+              className={`text-xs text-white rounded px-3 py-1.5 transition-colors flex items-center gap-1.5 ${
+                isGenerating
+                  ? "bg-blue-400 cursor-not-allowed"
+                  : "bg-blue-600 hover:bg-blue-700"
+              }`}
             >
-              ↻ Generate sub-table
+              {isGenerating ? (
+                <>
+                  <div className="w-2.5 h-2.5 border border-white border-t-transparent rounded-full animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>↻ Generate sub-table</>
+              )}
             </button>
             <button
-              onClick={() =>
-                onToast("Sub-table approved.", "success")
-              }
+              onClick={() => onToast("Sub-table approved.", "success")}
               className="text-xs text-white bg-[#1B4F23] rounded px-3 py-1.5 hover:bg-[#163d1c] transition-colors"
             >
               ✓ Approve
@@ -566,8 +578,14 @@ const TmrReview: FC<TmrReviewProps> = ({
   const [loadingCells, setLoadingCells] = useState(true);
   const [expandedSubTable, setExpandedSubTable] = useState<number | null>(null);
   const [generatingAll, setGeneratingAll] = useState(false);
+  const [generatingOne, setGeneratingOne] = useState<number | null>(null);
+  const [genProgress, setGenProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
 
-  // ── Load _cells.json ────────────────────────────────────────────────────
+  // ── Load _cells.json ──────────────────────────────────────────────────────
+
   useEffect(() => {
     let cancelled = false;
 
@@ -581,7 +599,6 @@ const TmrReview: FC<TmrReviewProps> = ({
         }
       } catch {
         if (!cancelled) {
-          // loadSubTables handles errors internally; this is a safety net
           setSubTables([]);
           setLoadingCells(false);
         }
@@ -594,53 +611,127 @@ const TmrReview: FC<TmrReviewProps> = ({
     };
   }, [projectDir]);
 
-  // ── Generate all sub-tables ─────────────────────────────────────────────
+  // ── Reload a single sub-table from disk after generation ─────────────────
+
+  const reloadSubTable = useCallback(
+    async (n: number) => {
+      try {
+        const cellsPath = [projectDir, "drafts", "tmr", "_cells.json"]
+          .map((p) => p.replace(/[/\\]+$/, ""))
+          .join("/");
+        const raw = await readTextFile(cellsPath);
+        const cellsJson = JSON.parse(raw) as Record<string, unknown>;
+        const spec = WCA_SUBTABLES[String(n)];
+        if (!spec) return;
+        const rawEntry = cellsJson[`sub_table_${n}`];
+        if (!rawEntry || typeof rawEntry !== "object") return;
+        const updated = parseSubTableEntry(
+          n,
+          rawEntry as Record<string, unknown>,
+          spec,
+        );
+        setSubTables((prev) =>
+          prev.map((st) => (st.number === n ? updated : st)),
+        );
+      } catch {
+        // Reload failed — leave existing state
+      }
+    },
+    [projectDir],
+  );
+
+  // ── Generate all sub-tables ───────────────────────────────────────────────
+
   async function handleGenerateAll() {
     setGeneratingAll(true);
+    setGenProgress({ done: 0, total: 23 });
+
+    const unlisten = await listen<GenerationProgressPayload>(
+      "generation-progress",
+      (event) => {
+        const { type, number, status, message } = event.payload;
+        if (type !== "tmr") return;
+
+        if (status === "done") {
+          void reloadSubTable(number);
+        } else {
+          onToast(
+            `T${number} failed: ${message ?? "unknown error"}`,
+            "error",
+          );
+        }
+        setGenProgress((prev) =>
+          prev ? { ...prev, done: prev.done + 1 } : null,
+        );
+      },
+    );
+
     try {
-      const msg = await invoke<string>("generate_tmr_subtable", {
+      const result = await invoke<string>("generate_tmr_subtable", {
         projectDir,
         subTableNumber: 0, // 0 = all
         model: "deepseek-v4-flash",
       });
-      onToast(msg, "info");
+      onToast(`Generation complete — ${result}.`, "success");
     } catch (err) {
-      onToast(String(err), "warning");
+      onToast(String(err), "error");
     } finally {
+      unlisten();
       setGeneratingAll(false);
+      setGenProgress(null);
     }
   }
 
-  // ── Generate one sub-table ──────────────────────────────────────────────
+  // ── Generate one sub-table ────────────────────────────────────────────────
+
   async function handleGenerateOne(subTableNumber: number) {
+    setGeneratingOne(subTableNumber);
+
+    const unlisten = await listen<GenerationProgressPayload>(
+      "generation-progress",
+      (event) => {
+        const { type, number, status, message } = event.payload;
+        if (type !== "tmr" || number !== subTableNumber) return;
+
+        if (status === "done") {
+          void reloadSubTable(number);
+        } else {
+          onToast(
+            `T${number} failed: ${message ?? "unknown error"}`,
+            "error",
+          );
+        }
+      },
+    );
+
     try {
-      const msg = await invoke<string>("generate_tmr_subtable", {
+      const result = await invoke<string>("generate_tmr_subtable", {
         projectDir,
         subTableNumber,
         model: "deepseek-v4-flash",
       });
-      onToast(msg, "info");
+      onToast(result, "success");
     } catch (err) {
-      onToast(String(err), "warning");
+      onToast(String(err), "error");
+    } finally {
+      unlisten();
+      setGeneratingOne(null);
     }
   }
 
-  // ── Summary counts ───────────────────────────────────────────────────────
-  const populatedCount = subTables.filter(
-    (s) => s.status === "populated",
-  ).length;
+  // ── Summary counts ────────────────────────────────────────────────────────
+
+  const populatedCount = subTables.filter((s) => s.status === "populated").length;
   const partialCount = subTables.filter((s) => s.status === "partial").length;
   const emptyCount = subTables.filter((s) => s.status === "empty").length;
-  const failedCount = subTables.filter(
-    (s) => s.status === "parse_failed",
-  ).length;
-  const notRunCount = subTables.filter(
-    (s) => s.status === "not_generated",
-  ).length;
+  const failedCount = subTables.filter((s) => s.status === "parse_failed").length;
+  const notRunCount = subTables.filter((s) => s.status === "not_generated").length;
   const totalCellsPopulated = subTables.reduce(
     (sum, s) => sum + s.populatedCells,
     0,
   );
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -663,9 +754,9 @@ const TmrReview: FC<TmrReviewProps> = ({
           </div>
           <button
             onClick={() => void handleGenerateAll()}
-            disabled={generatingAll}
+            disabled={generatingAll || generatingOne !== null}
             className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
-              generatingAll
+              generatingAll || generatingOne !== null
                 ? "border-green-600 text-green-300 cursor-not-allowed"
                 : "border-green-500 text-green-100 hover:bg-white/10 hover:border-green-300"
             }`}
@@ -681,6 +772,30 @@ const TmrReview: FC<TmrReviewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Generation progress bar */}
+      {generatingAll && genProgress && (
+        <div className="bg-blue-50 border-b border-blue-200 px-6 py-2">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center justify-between text-xs text-gray-600 mb-1.5">
+              <span>Generating TMR sub-tables…</span>
+              <span className="font-medium tabular-nums">
+                {genProgress.done} / {genProgress.total}
+              </span>
+            </div>
+            <div className="h-1.5 bg-blue-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                style={{
+                  width: `${Math.round(
+                    (genProgress.done / genProgress.total) * 100,
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tab bar — MR / TMR switcher */}
       <div className="bg-white border-b border-gray-200 px-6">
@@ -740,6 +855,10 @@ const TmrReview: FC<TmrReviewProps> = ({
                 key={st.number}
                 subTable={st}
                 isExpanded={expandedSubTable === st.number}
+                isGenerating={
+                  generatingOne === st.number ||
+                  (generatingAll)
+                }
                 onToggle={() =>
                   setExpandedSubTable(
                     expandedSubTable === st.number ? null : st.number,

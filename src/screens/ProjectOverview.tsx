@@ -8,9 +8,13 @@
  *
  * This is the hub screen between the project list (Screen 1) and the
  * detail review screens (MR / TMR).
+ *
+ * Session 14: "Generate all" buttons now call real Tauri commands with
+ * spinner feedback while generation runs.
  */
 
-import { type FC } from "react";
+import { useState, type FC } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, ToastMessage } from "../types/ui";
 
 // ---------------------------------------------------------------------------
@@ -48,9 +52,7 @@ function MetricCard({
       <div className="text-2xl font-bold text-gray-900 leading-tight">
         {value}
       </div>
-      {sub && (
-        <div className="text-xs text-gray-400 mt-0.5">{sub}</div>
-      )}
+      {sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}
       {progress !== undefined && (
         <div className="mt-2 h-1 bg-gray-100 rounded-full overflow-hidden">
           <div
@@ -74,6 +76,7 @@ function GeneratorCard({
   okLabel,
   totalCount,
   notRunCount,
+  generating,
   onOpen,
   onGenerate,
 }: {
@@ -83,6 +86,7 @@ function GeneratorCard({
   okLabel: string;
   totalCount: number;
   notRunCount: number;
+  generating: boolean;
   onOpen: () => void;
   onGenerate: () => void;
 }) {
@@ -128,9 +132,21 @@ function GeneratorCard({
         </button>
         <button
           onClick={onGenerate}
-          className="text-xs text-gray-500 border border-gray-200 rounded-lg px-3 py-2 hover:border-gray-300 hover:text-gray-700 transition-colors"
+          disabled={generating}
+          className={`text-xs border rounded-lg px-3 py-2 transition-colors flex items-center gap-1.5 ${
+            generating
+              ? "border-gray-200 text-gray-300 cursor-not-allowed"
+              : "text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700"
+          }`}
         >
-          ↻ Generate all
+          {generating ? (
+            <>
+              <div className="w-2.5 h-2.5 border border-gray-300 border-t-transparent rounded-full animate-spin" />
+              Generating…
+            </>
+          ) : (
+            <>↻ Generate all</>
+          )}
         </button>
       </div>
     </div>
@@ -175,6 +191,9 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
   onOpenTmrReview,
   onToast,
 }) => {
+  const [mrGenerating, setMrGenerating] = useState(false);
+  const [tmrGenerating, setTmrGenerating] = useState(false);
+
   const {
     manifest,
     mrSectionsOk,
@@ -187,6 +206,41 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
 
   const mrNotRun = mrSectionsTotal - mrSectionsOk;
   const tmrNotRun = tmrSubTablesTotal - tmrSubTablesOk;
+
+  function handleGenerateMr() {
+    setMrGenerating(true);
+    void invoke<string>("generate_mr_sections", {
+      projectDir: project.dir,
+      model: "deepseek-v4-flash",
+    })
+      .then((msg) => {
+        onToast(`MR generation complete — ${msg}.`, "success");
+      })
+      .catch((err: unknown) => {
+        onToast(`MR generation failed: ${String(err)}`, "error");
+      })
+      .finally(() => {
+        setMrGenerating(false);
+      });
+  }
+
+  function handleGenerateTmr() {
+    setTmrGenerating(true);
+    void invoke<string>("generate_tmr_subtable", {
+      projectDir: project.dir,
+      subTableNumber: 0, // 0 = all
+      model: "deepseek-v4-flash",
+    })
+      .then((msg) => {
+        onToast(`TMR generation complete — ${msg}.`, "success");
+      })
+      .catch((err: unknown) => {
+        onToast(`TMR generation failed: ${String(err)}`, "error");
+      })
+      .finally(() => {
+        setTmrGenerating(false);
+      });
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -272,10 +326,9 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
             okLabel="Sections with claims"
             totalCount={mrSectionsTotal}
             notRunCount={mrNotRun}
+            generating={mrGenerating}
             onOpen={onOpenMrReview}
-            onGenerate={() =>
-              onToast("Generate all MR sections — coming in Session 14.", "info")
-            }
+            onGenerate={handleGenerateMr}
           />
           <GeneratorCard
             title="Tables of Main Results"
@@ -284,10 +337,9 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
             okLabel="Sub-tables with data"
             totalCount={tmrSubTablesTotal}
             notRunCount={tmrNotRun}
+            generating={tmrGenerating}
             onOpen={onOpenTmrReview}
-            onGenerate={() =>
-              onToast("Generate all TMR sub-tables — coming in Session 14.", "info")
-            }
+            onGenerate={handleGenerateTmr}
           />
         </div>
 

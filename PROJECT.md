@@ -564,6 +564,63 @@ GENERATE TMR SUBTABLE: sub_table_number=0 means "all" in the Rust command. This 
 needing a separate `generate_all_tmr` command. Session 14 will replace the placeholder
 with real sidecar invocation.
 
+---
+
+## Session 14 — Wire generator buttons to real Node.js generators
+
+**Files created/modified:**
+- `src-tauri/scripts/generate.ts` — new CLI wrapper; run via `node tsx/dist/cli.mjs generate.ts --project ... --type mr|tmr --all|--section <n>|--subtable <n> [--model]`
+- `src-tauri/Cargo.toml` — added `tauri-plugin-shell = "2"`
+- `src-tauri/src/lib.rs` — real shell invocation + stdout line parsing + Tauri event emission
+- `src/screens/MrReview.tsx` — `listen("generation-progress")` + per-section reload + progress bar
+- `src/screens/TmrReview.tsx` — same pattern for TMR; per-subtable spinner via `generatingOne` state
+- `src/screens/ProjectOverview.tsx` — real `invoke` calls on "Generate all" buttons + spinners
+- `package.json` / `package-lock.json` — added `tsx` as devDependency (TypeScript runner for Node)
+
+**Architecture (shell-based generator invocation):**
+
+```
+Tauri UI  →  invoke("generate_mr_sections", { projectDir, model })
+              ↓
+           Rust: app.shell().command("node").args([tsx_cli, generate.ts, ...]).spawn()
+              ↓
+           Node child process running generate.ts via tsx
+              ↓  stdout (line-buffered)
+           DONE:N  / ERROR:N:msg / STATUS:msg
+              ↓
+           Rust: app.emit("generation-progress", { type, number, status, message })
+              ↓
+           Frontend: listen("generation-progress") → reloadSection(n) / reloadSubTable(n)
+```
+
+**Key decisions:**
+- tsx (`node node_modules/tsx/dist/cli.mjs`) used instead of `node --experimental-strip-types`
+  because Node 22 strip-types does NOT resolve extensionless TypeScript imports (e.g., `import
+  { x } from "../module"` won't find `../module.ts`). tsx registers a module loader that handles
+  this correctly.
+- Generator paths use `CARGO_MANIFEST_DIR.parent()` (= PIPELINE root) — avoids `..` segments
+  in paths, which would require canonicalize and risk UNC prefix issues on Windows.
+- Rust-side `app.shell().command(...)` does NOT require capability permissions. Only frontend JS
+  shell API needs `shell:allow-spawn`. Since generation is purely Rust-side, no capabilities
+  changed.
+- Progress events use `#[serde(rename = "type")]` on the Rust struct so the JSON field is
+  "type" (not "gen_type"), matching the frontend `GenerationProgressPayload` interface.
+- `listen(...)` is awaited BEFORE `invoke(...)` so no events are missed during the initial
+  generation startup.
+
+**v1 limitation — dev mode only:**
+The shell-based invocation (`env!("CARGO_MANIFEST_DIR")` + `node node_modules/tsx/...`) only
+works in development. In a production Tauri bundle, `CARGO_MANIFEST_DIR` points to the build
+machine's source tree (not the user's machine) and `node_modules` is not bundled with the app.
+
+For v1 production builds, one of the following must be implemented before shipping:
+  a) Bundle the generators as a Tauri sidecar (pre-compiled Node bundle via `esbuild --bundle`)
+  b) Require Node.js on the user's PATH and bundle `generate.ts` as a resource
+  c) Port the generators to Rust/WASM
+
+This is tracked as a known limitation. For FAO internal use where statisticians always have
+Node installed and run from the source checkout, the current approach is sufficient.
+
 NEXT SESSION (14): Wire `generate_mr_sections` and `generate_tmr_subtable` to actual
 Node.js generation via Tauri sidecar or shell_execute. Consider running generation in
 a background thread with progress events streamed back via Tauri events.
