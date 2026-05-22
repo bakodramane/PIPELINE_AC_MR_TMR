@@ -95,6 +95,8 @@ export interface SectionInfo {
   claims: Claim[];
   /** True when the Session 11 truncation_warning flag is present in _claims.json */
   truncatedWarning: boolean;
+  /** True when a statistician has approved this section via approve_mr_section */
+  approved: boolean;
 }
 
 // ---------------------------------------------------------------------------

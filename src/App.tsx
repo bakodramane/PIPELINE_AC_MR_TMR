@@ -16,6 +16,7 @@ import ProjectList from "./screens/ProjectList";
 import ProjectOverview from "./screens/ProjectOverview";
 import MrReview from "./screens/MrReview";
 import TmrReview from "./screens/TmrReview";
+import AuditLog from "./screens/AuditLog";
 import type { ProjectInfo, ToastMessage } from "./types/ui";
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,8 @@ type Screen =
   | { id: "list" }
   | { id: "project-overview"; project: ProjectInfo }
   | { id: "mr-review"; project: ProjectInfo }
-  | { id: "tmr-review"; project: ProjectInfo };
+  | { id: "tmr-review"; project: ProjectInfo }
+  | { id: "audit-log"; project: ProjectInfo };
 
 // ---------------------------------------------------------------------------
 // Toast component
@@ -158,6 +160,9 @@ export default function App() {
             onOpenTmrReview={() =>
               setScreen({ id: "tmr-review", project: screen.project })
             }
+            onOpenAuditLog={() =>
+              setScreen({ id: "audit-log", project: screen.project })
+            }
             onToast={addToast}
           />
         );
@@ -187,6 +192,18 @@ export default function App() {
             }
             onSwitchToMr={() =>
               setScreen({ id: "mr-review", project: screen.project })
+            }
+            onToast={addToast}
+          />
+        );
+
+      case "audit-log":
+        return (
+          <AuditLog
+            projectDir={screen.project.dir}
+            projectName={`${screen.project.manifest.country} ${screen.project.manifest.reference_year}`}
+            onBack={() =>
+              setScreen({ id: "project-overview", project: screen.project })
             }
             onToast={addToast}
           />

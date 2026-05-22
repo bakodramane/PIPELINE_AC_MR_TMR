@@ -758,3 +758,84 @@ Added to `src-tauri/src/lib.rs`:
 
 NEXT SESSION (17): PDF/document ingestion — drag-drop or file-pick PDFs into `sources/`, index
 pages into `evidence/pages/` so generators can retrieve evidence for new country projects.
+
+---
+
+## Session 17 — Inline MR editing, section approval, audit log viewer
+
+**Goals accomplished:**
+1. Inline claim editing for MR sections (Goal 1)
+2. Section approval button with approved badge (Goal 2)
+3. Audit log viewer screen (Goal 3)
+
+**Goal 1 — Inline claim editing:**
+
+New Tauri command `save_mr_section(project_dir, section_number, claims_json)` in `lib.rs`:
+- Reads `_claims.json`, replaces `section_<n>` key with new section data
+- Sets `approved: false` on save (editing resets approval — guard against stale approval)
+- Writes back with `serde_json::to_string_pretty` (no BOM)
+- Returns `Ok(())` (sync command, uses `std::fs`)
+
+`SectionCard` in `MrReview.tsx` now has internal edit state:
+- `editing`, `editClaims`, `saving`, `approving` state
+- Clicking "Edit claims": clones current claims into `editClaims`, enters edit mode
+- Edit mode: each claim shows `AutoResizeTextarea` (self-expanding) + non-editable source citation labels + "✕ Delete" button
+- "Add claim" button: appends blank claim with `human_edited: true`
+- "Save": marks all claims `human_edited: true`, invokes `save_mr_section`, awaits `reloadSection`, exits edit mode, shows success toast
+- "Cancel": discards `editClaims`, exits edit mode without saving
+- Header toggle is disabled while editing (header not clickable; "Editing" indicator shown)
+
+**Goal 2 — Approve button:**
+
+New Tauri command `approve_mr_section(project_dir, section_number)` in `lib.rs`:
+- Reads `_claims.json`, sets `section_<n>.approved = true`, writes back
+- Returns `Err` if section key not found (must generate first)
+
+`SectionInfo` in `ui.ts` gained `approved: boolean` field.
+
+`buildSections` and `reloadSection` in `MrReview.tsx` now read `sectionData.approved === true`.
+
+`SectionCard` approve button behavior:
+- Active (green): "✓ Approve" → invokes `approve_mr_section`, reloads section, shows success toast
+- While approving: spinner + "Approving…"
+- After approval: greyed-out emerald-700, "✓ Approved", disabled
+- After saving edits: `approved` resets to `false` (Rust sets it) → button becomes active again
+
+`ApprovedBadge` component: emerald "✓ approved" badge shown in section card header alongside the status badge when `section.approved === true`.
+
+**Goal 3 — Audit log viewer:**
+
+New file `src/screens/AuditLog.tsx`:
+- Loads all `*.jsonl` files from `audit/` via `readDir` + `readTextFile` (Tauri fs plugin)
+- Parses each newline-delimited JSON event line
+- Sorts newest-first by default with toggle to oldest-first
+- Event type colour coding: generation=blue, edit=yellow, approval/certified=emerald, export=purple, ingest/project=grey, flag=orange
+- Per-event detail rows:
+  - generation_completed: target (MR §n / TMR Tn), model, in/out tokens, cost USD, wall time
+  - generation_started: target, model, "starting…"
+  - section_edited/cell_edited: section/table key, claim/cell key, old→new value
+  - export: format + filename (last path component only)
+  - source_added/evidence_indexed/project_created: source details
+  - certified_gold_standard/flag_raised/flag_resolved: certifier/location + details
+- "↓ Download full log" button: invokes new `open_path` Rust command that calls `app.shell().open(path, None)` to open the most-recent JSONL in system default text editor
+
+New Tauri command `open_path(path: String)` in `lib.rs`:
+- Uses `app.shell().open(&path, None::<String>)` (sync)
+- Returns `Ok(())` or `Err(message)` — no capability changes needed (Rust backend)
+
+`ProjectOverview.tsx`: added `onOpenAuditLog: () => void` prop; "Audit log" NavTab now calls it instead of showing a toast.
+
+`App.tsx`: added `audit-log` Screen variant; renders `<AuditLog>` with back navigation to `project-overview`.
+
+**Files changed:**
+- `src-tauri/src/lib.rs` — added `save_mr_section`, `approve_mr_section`, `open_path` commands + registered
+- `src/types/ui.ts` — `SectionInfo.approved: boolean` field added
+- `src/screens/MrReview.tsx` — complete rewrite with inline editing + approve
+- `src/screens/AuditLog.tsx` — NEW: audit log viewer screen
+- `src/screens/ProjectOverview.tsx` — `onOpenAuditLog` prop + Audit log tab wired
+- `src/App.tsx` — `audit-log` screen variant added
+
+**TypeScript:** `npx tsc --noEmit` → zero errors.
+
+NEXT SESSION (18): PDF/document ingestion — drag-drop or file-pick PDFs into `sources/`,
+index pages into `evidence/pages/` so generators can retrieve evidence for new country projects.

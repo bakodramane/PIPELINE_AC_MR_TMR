@@ -26,6 +26,7 @@ interface ProjectOverviewProps {
   onBack: () => void;
   onOpenMrReview: () => void;
   onOpenTmrReview: () => void;
+  onOpenAuditLog: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
 }
 
@@ -189,6 +190,7 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
   onBack,
   onOpenMrReview,
   onOpenTmrReview,
+  onOpenAuditLog,
   onToast,
 }) => {
   const [mrGenerating, setMrGenerating] = useState(false);
@@ -362,9 +364,7 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
             />
             <NavTab
               label="Audit log"
-              onClick={() =>
-                onToast("Audit log — coming in a future session.", "info")
-              }
+              onClick={onOpenAuditLog}
             />
           </div>
           <div className="px-6 py-8 text-center">

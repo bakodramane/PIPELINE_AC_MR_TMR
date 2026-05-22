@@ -9,9 +9,12 @@
  * `generate_mr_sections` command via the shell plugin.  Progress events
  * ("generation-progress") stream back from Rust and each completed section
  * is reloaded from disk without a full-page refresh.
+ *
+ * Session 17: Inline claim editing via save_mr_section Tauri command.
+ *             Section approval via approve_mr_section Tauri command.
  */
 
-import { useState, useEffect, useCallback, type FC } from "react";
+import { useState, useEffect, useCallback, useRef, type FC } from "react";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -93,8 +96,52 @@ function StatusBadge({ status }: { status: SectionStatus }) {
   );
 }
 
+function ApprovedBadge() {
+  return (
+    <span className="inline-flex items-center text-[11px] font-medium border px-2 py-0.5 rounded-full bg-emerald-100 border-emerald-300 text-emerald-700">
+      ✓ approved
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Claim item
+// Auto-resize textarea
+// ---------------------------------------------------------------------------
+
+function AutoResizeTextarea({
+  value,
+  onChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = "auto";
+      ref.current.style.height = `${ref.current.scrollHeight}px`;
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={className}
+      rows={1}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Claim item (read-only view)
 // ---------------------------------------------------------------------------
 
 function ClaimItem({ claim }: { claim: Claim }) {
@@ -137,7 +184,7 @@ function ClaimItem({ claim }: { claim: Claim }) {
 }
 
 // ---------------------------------------------------------------------------
-// Section card
+// Section card — with inline edit mode and approve button
 // ---------------------------------------------------------------------------
 
 function SectionCard({
@@ -145,24 +192,114 @@ function SectionCard({
   isExpanded,
   onToggle,
   onToast,
+  projectDir,
+  onSectionSaved,
+  onSectionApproved,
 }: {
   section: SectionInfo;
   isExpanded: boolean;
   onToggle: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
+  projectDir: string;
+  onSectionSaved: (n: number) => Promise<void>;
+  onSectionApproved: (n: number) => Promise<void>;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [editClaims, setEditClaims] = useState<Claim[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [approving, setApproving] = useState(false);
+
   const hasContent = section.claims.length > 0;
+
+  function enterEdit() {
+    setEditClaims(section.claims.map((c) => ({ ...c })));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setEditClaims([]);
+  }
+
+  function updateClaimText(idx: number, text: string) {
+    setEditClaims((prev) =>
+      prev.map((c, i) => (i === idx ? { ...c, text } : c)),
+    );
+  }
+
+  function deleteClaim(idx: number) {
+    setEditClaims((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function addClaim() {
+    const newClaim: Claim = {
+      claim_id: `${section.number}.${editClaims.length + 1}`,
+      text: "",
+      sources: [],
+      deviation_flags: [],
+      human_edited: true,
+    };
+    setEditClaims((prev) => [...prev, newClaim]);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      // Mark every claim as human_edited on save
+      const updatedClaims = editClaims.map((c) => ({
+        ...c,
+        human_edited: true,
+      }));
+      const sectionPayload = { claims: updatedClaims };
+      await invoke("save_mr_section", {
+        projectDir,
+        sectionNumber: section.number,
+        claimsJson: JSON.stringify(sectionPayload),
+      });
+      // Reload section from disk, THEN exit edit mode so UI shows fresh data
+      await onSectionSaved(section.number);
+      setEditing(false);
+      setEditClaims([]);
+      onToast(`§${section.number} saved.`, "success");
+    } catch (err) {
+      onToast(`Save failed: ${String(err)}`, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleApprove() {
+    setApproving(true);
+    try {
+      await invoke("approve_mr_section", {
+        projectDir,
+        sectionNumber: section.number,
+      });
+      await onSectionApproved(section.number);
+      onToast(`§${section.number} approved.`, "success");
+    } catch (err) {
+      onToast(`Approve failed: ${String(err)}`, "error");
+    } finally {
+      setApproving(false);
+    }
+  }
 
   return (
     <div
       className={`border rounded-lg overflow-hidden transition-shadow ${
-        isExpanded ? "border-[#1B4F23] shadow-sm" : "border-gray-200"
+        editing
+          ? "border-blue-400 shadow-sm"
+          : isExpanded
+          ? "border-[#1B4F23] shadow-sm"
+          : "border-gray-200"
       }`}
     >
-      {/* Header row — always visible */}
+      {/* Header row — clicking toggles expand; disabled while editing */}
       <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-3 px-4 py-3 bg-white hover:bg-gray-50 text-left transition-colors"
+        onClick={editing ? undefined : onToggle}
+        className={`w-full flex items-center gap-3 px-4 py-3 bg-white text-left transition-colors ${
+          editing ? "cursor-default" : "hover:bg-gray-50"
+        }`}
       >
         <span className="text-xs font-mono text-gray-400 w-5 shrink-0">
           §{section.number}
@@ -171,7 +308,12 @@ function SectionCard({
           {section.title}
         </span>
         <div className="flex items-center gap-2 shrink-0">
-          {section.truncatedWarning && (
+          {editing && (
+            <span className="text-[11px] text-blue-600 font-medium">
+              Editing
+            </span>
+          )}
+          {section.truncatedWarning && !editing && (
             <span
               className="text-[10px] text-orange-500"
               title="Model output was truncated"
@@ -179,20 +321,102 @@ function SectionCard({
               ⚠
             </span>
           )}
-          {hasContent && (
+          {hasContent && !editing && (
             <span className="text-xs text-gray-400 tabular-nums">
               {section.claimCount} claim{section.claimCount !== 1 ? "s" : ""}
             </span>
           )}
-          <StatusBadge status={section.status} />
-          <span className="text-gray-300 ml-1">
-            {isExpanded ? "▲" : "▼"}
-          </span>
+          {section.approved && !editing && <ApprovedBadge />}
+          {!editing && <StatusBadge status={section.status} />}
+          {!editing && (
+            <span className="text-gray-300 ml-1">
+              {isExpanded ? "▲" : "▼"}
+            </span>
+          )}
         </div>
       </button>
 
-      {/* Expanded body */}
-      {isExpanded && (
+      {/* ── Edit mode body ─────────────────────────────────────────────── */}
+      {editing && (
+        <div className="border-t border-gray-100 bg-gray-50 px-4 py-3 space-y-3">
+          {editClaims.length === 0 && (
+            <p className="text-sm text-gray-400 italic">
+              No claims. Use "Add claim" below to add one.
+            </p>
+          )}
+
+          {editClaims.map((claim, idx) => (
+            <div
+              key={claim.claim_id || idx}
+              className="border border-gray-200 rounded-md bg-white p-3 space-y-2"
+            >
+              <div className="flex gap-2 items-start">
+                <AutoResizeTextarea
+                  value={claim.text}
+                  onChange={(v) => updateClaimText(idx, v)}
+                  placeholder="Enter claim text…"
+                  className="flex-1 text-sm text-gray-800 border border-gray-200 rounded p-2 focus:border-blue-400 focus:outline-none resize-none min-h-[2.5rem] leading-relaxed"
+                />
+                <button
+                  onClick={() => deleteClaim(idx)}
+                  className="shrink-0 self-start text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1 hover:bg-red-50 transition-colors"
+                >
+                  ✕ Delete
+                </button>
+              </div>
+
+              {/* Source citations — shown as non-editable grey labels */}
+              {claim.sources.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  <span className="text-[10px] text-gray-400">Sources:</span>
+                  {claim.sources.map((src, i) => (
+                    <span
+                      key={i}
+                      className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded font-mono border border-gray-200"
+                      title="Source citation — not editable manually"
+                    >
+                      {src.page_id}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Add claim */}
+          <button
+            onClick={addClaim}
+            className="text-xs text-blue-600 border border-blue-200 rounded px-3 py-1.5 hover:bg-blue-50 transition-colors"
+          >
+            + Add claim
+          </button>
+
+          {/* Save / Cancel */}
+          <div className="flex gap-2 pt-2 border-t border-gray-200">
+            <button
+              onClick={() => void handleSave()}
+              disabled={saving}
+              className={`text-xs text-white bg-[#1B4F23] rounded px-4 py-1.5 transition-colors ${
+                saving
+                  ? "opacity-60 cursor-not-allowed"
+                  : "hover:bg-[#163d1c]"
+              }`}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={cancelEdit}
+              disabled={saving}
+              className="text-xs text-gray-500 border border-gray-200 rounded px-3 py-1.5 hover:border-gray-300 hover:text-gray-700 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Normal expanded body ────────────────────────────────────────── */}
+      {isExpanded && !editing && (
         <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
           {section.status === "not_generated" ? (
             <p className="text-sm text-gray-400 italic">
@@ -221,18 +445,32 @@ function SectionCard({
 
           <div className="mt-3 flex gap-2">
             <button
-              onClick={() =>
-                onToast("Claim editing is coming in a future session.", "info")
-              }
+              onClick={enterEdit}
               className="text-xs text-gray-500 border border-gray-200 rounded px-3 py-1.5 hover:border-gray-300 hover:text-gray-700 transition-colors"
             >
               Edit claims
             </button>
             <button
-              onClick={() => onToast("Section approved.", "success")}
-              className="text-xs text-white bg-[#1B4F23] rounded px-3 py-1.5 hover:bg-[#163d1c] transition-colors"
+              onClick={() => void handleApprove()}
+              disabled={section.approved || approving}
+              className={`text-xs text-white rounded px-3 py-1.5 transition-colors flex items-center gap-1.5 ${
+                section.approved
+                  ? "bg-emerald-700 opacity-60 cursor-not-allowed"
+                  : approving
+                  ? "bg-[#1B4F23] opacity-60 cursor-not-allowed"
+                  : "bg-[#1B4F23] hover:bg-[#163d1c]"
+              }`}
             >
-              ✓ Approve
+              {approving ? (
+                <>
+                  <div className="w-2.5 h-2.5 border border-white border-t-transparent rounded-full animate-spin" />
+                  Approving…
+                </>
+              ) : section.approved ? (
+                <>✓ Approved</>
+              ) : (
+                <>✓ Approve</>
+              )}
             </button>
           </div>
         </div>
@@ -269,18 +507,23 @@ const MrReview: FC<MrReviewProps> = ({
       const num = idx + 1;
       const key = `section_${num}`;
       const sectionData = allClaims[key] as
-        | (ClaimsJson[string] & { truncated_warning?: boolean })
+        | (ClaimsJson[string] & {
+            truncated_warning?: boolean;
+            approved?: boolean;
+          })
         | undefined;
 
       let status: SectionStatus;
       let claims: Claim[] = [];
       let truncatedWarning = false;
+      let approved = false;
 
       if (!sectionData) {
         status = "not_generated";
       } else {
         claims = sectionData.claims;
         truncatedWarning = sectionData.truncated_warning === true;
+        approved = sectionData.approved === true;
         status = claims.length > 0 ? "ok" : "empty";
       }
 
@@ -291,6 +534,7 @@ const MrReview: FC<MrReviewProps> = ({
         claimCount: claims.length,
         claims,
         truncatedWarning,
+        approved,
       };
     });
   }
@@ -318,6 +562,7 @@ const MrReview: FC<MrReviewProps> = ({
               claimCount: 0,
               claims: [],
               truncatedWarning: false,
+              approved: false,
             })),
           );
           setLoadingClaims(false);
@@ -331,7 +576,7 @@ const MrReview: FC<MrReviewProps> = ({
     };
   }, [projectDir]);
 
-  // ── Reload a single section from disk after generation ───────────────────
+  // ── Reload a single section from disk ────────────────────────────────────
 
   const reloadSection = useCallback(
     async (n: number) => {
@@ -341,18 +586,23 @@ const MrReview: FC<MrReviewProps> = ({
         const allClaims = JSON.parse(raw) as ClaimsJson;
         const key = `section_${n}`;
         const sectionData = allClaims[key] as
-          | (ClaimsJson[string] & { truncated_warning?: boolean })
+          | (ClaimsJson[string] & {
+              truncated_warning?: boolean;
+              approved?: boolean;
+            })
           | undefined;
 
         let status: SectionStatus;
         let claims: Claim[] = [];
         let truncatedWarning = false;
+        let approved = false;
 
         if (!sectionData) {
           status = "not_generated";
         } else {
           claims = sectionData.claims;
           truncatedWarning = sectionData.truncated_warning === true;
+          approved = sectionData.approved === true;
           status = claims.length > 0 ? "ok" : "empty";
         }
 
@@ -366,6 +616,7 @@ const MrReview: FC<MrReviewProps> = ({
                   claimCount: claims.length,
                   claims,
                   truncatedWarning,
+                  approved,
                 }
               : s,
           ),
@@ -588,6 +839,9 @@ const MrReview: FC<MrReviewProps> = ({
                   )
                 }
                 onToast={onToast}
+                projectDir={projectDir}
+                onSectionSaved={reloadSection}
+                onSectionApproved={reloadSection}
               />
             ))}
           </div>

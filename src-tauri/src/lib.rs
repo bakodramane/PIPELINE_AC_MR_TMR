@@ -342,6 +342,124 @@ async fn export_project(
 }
 
 // ---------------------------------------------------------------------------
+// Save MR section command
+// ---------------------------------------------------------------------------
+
+/// Write updated claims for one MR section back to `drafts/mr/_claims.json`.
+///
+/// `claims_json` is a JSON string of the shape `{ "claims": [...] }`.
+/// The command:
+///   - Reads the full `_claims.json`
+///   - Replaces the `section_<n>` key with the new section data
+///   - Sets `approved: false` on the section (editing resets approval)
+///   - Writes back as pretty-printed JSON with no BOM
+#[tauri::command]
+fn save_mr_section(
+    project_dir: String,
+    section_number: u32,
+    claims_json: String,
+) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let claims_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("mr")
+        .join("_claims.json");
+
+    let raw = fs::read_to_string(&claims_path)
+        .map_err(|e| format!("Failed to read _claims.json: {e}"))?;
+
+    let mut all_claims: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse _claims.json: {e}"))?;
+
+    let mut new_section: serde_json::Value = serde_json::from_str(&claims_json)
+        .map_err(|e| format!("Failed to parse claims_json: {e}"))?;
+
+    // Editing resets the approved flag — guard against approving stale content.
+    if let Some(obj) = new_section.as_object_mut() {
+        obj.insert("approved".to_string(), serde_json::Value::Bool(false));
+    }
+
+    let key = format!("section_{section_number}");
+    if let Some(obj) = all_claims.as_object_mut() {
+        obj.insert(key, new_section);
+    }
+
+    let updated = serde_json::to_string_pretty(&all_claims)
+        .map_err(|e| format!("Failed to serialize _claims.json: {e}"))?;
+
+    fs::write(&claims_path, updated.as_bytes())
+        .map_err(|e| format!("Failed to write _claims.json: {e}"))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Approve MR section command
+// ---------------------------------------------------------------------------
+
+/// Set `approved: true` on one MR section in `drafts/mr/_claims.json`.
+///
+/// Fails if the section key does not exist in `_claims.json`
+/// (the section must have been generated before it can be approved).
+#[tauri::command]
+fn approve_mr_section(
+    project_dir: String,
+    section_number: u32,
+) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let claims_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("mr")
+        .join("_claims.json");
+
+    let raw = fs::read_to_string(&claims_path)
+        .map_err(|e| format!("Failed to read _claims.json: {e}"))?;
+
+    let mut all_claims: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse _claims.json: {e}"))?;
+
+    let key = format!("section_{section_number}");
+    if all_claims.get(&key).is_none() {
+        return Err(format!(
+            "Section {section_number} not found — generate it before approving."
+        ));
+    }
+
+    if let Some(section) = all_claims.get_mut(&key) {
+        if let Some(obj) = section.as_object_mut() {
+            obj.insert("approved".to_string(), serde_json::Value::Bool(true));
+        }
+    }
+
+    let updated = serde_json::to_string_pretty(&all_claims)
+        .map_err(|e| format!("Failed to serialize _claims.json: {e}"))?;
+
+    fs::write(&claims_path, updated.as_bytes())
+        .map_err(|e| format!("Failed to write _claims.json: {e}"))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Open path command
+// ---------------------------------------------------------------------------
+
+/// Open a file or directory with the OS default application.
+///
+/// Used by the Audit log viewer to open a JSONL file in the system's
+/// default text editor.  Delegates to tauri-plugin-shell's `open()`.
+#[tauri::command]
+fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    app.shell()
+        .open(&path, None::<String>)
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Create project command
 // ---------------------------------------------------------------------------
 
@@ -411,7 +529,10 @@ pub fn run() {
             generate_mr_sections,
             generate_tmr_subtable,
             create_project,
-            export_project
+            export_project,
+            save_mr_section,
+            approve_mr_section,
+            open_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");
