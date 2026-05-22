@@ -260,6 +260,7 @@ const MrReview: FC<MrReviewProps> = ({
     done: number;
     total: number;
   } | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   // ── Load _claims.json ─────────────────────────────────────────────────────
 
@@ -376,6 +377,24 @@ const MrReview: FC<MrReviewProps> = ({
     [projectDir],
   );
 
+  // ── Export MD ─────────────────────────────────────────────────────────────
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const outputPath = await invoke<string>("export_project", {
+        projectDir,
+        exportType: "mr",
+      });
+      const filename = outputPath.split(/[/\\]/).pop() ?? outputPath;
+      onToast(`MR exported to ${filename}`, "success");
+    } catch (err) {
+      onToast(`Export failed: ${String(err)}`, "error");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // ── Generate all sections ─────────────────────────────────────────────────
 
   async function handleGenerateAll() {
@@ -446,6 +465,25 @@ const MrReview: FC<MrReviewProps> = ({
               Metadata Review Draft
             </div>
           </div>
+          {/* Export MD — outline style to distinguish from the generate button */}
+          <button
+            onClick={() => void handleExport()}
+            disabled={exporting || generating}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors ${
+              exporting || generating
+                ? "border-white/20 text-white/30 cursor-not-allowed"
+                : "border-white/40 text-white/80 hover:bg-white/10 hover:border-white/60"
+            }`}
+          >
+            {exporting ? (
+              <>
+                <div className="w-3 h-3 border border-white/40 border-t-transparent rounded-full animate-spin" />
+                Exporting…
+              </>
+            ) : (
+              <>↓ Export MD</>
+            )}
+          </button>
           <button
             onClick={() => void handleGenerateAll()}
             disabled={generating}

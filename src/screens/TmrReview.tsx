@@ -583,6 +583,7 @@ const TmrReview: FC<TmrReviewProps> = ({
     done: number;
     total: number;
   } | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   // ── Load _cells.json ──────────────────────────────────────────────────────
 
@@ -639,6 +640,25 @@ const TmrReview: FC<TmrReviewProps> = ({
     },
     [projectDir],
   );
+
+  // ── Export XLSX ───────────────────────────────────────────────────────────
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const outputPath = await invoke<string>("export_project", {
+        projectDir,
+        exportType: "tmr",
+      });
+      // Show only the filename, not the full path
+      const filename = outputPath.split(/[/\\]/).pop() ?? outputPath;
+      onToast(`TMR exported to ${filename}`, "success");
+    } catch (err) {
+      onToast(`Export failed: ${String(err)}`, "error");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // ── Generate all sub-tables ───────────────────────────────────────────────
 
@@ -752,6 +772,25 @@ const TmrReview: FC<TmrReviewProps> = ({
               Tables of Main Results
             </div>
           </div>
+          {/* Export XLSX — outline style to distinguish from the generate button */}
+          <button
+            onClick={() => void handleExport()}
+            disabled={exporting || generatingAll || generatingOne !== null}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+              exporting || generatingAll || generatingOne !== null
+                ? "border-white/20 text-white/30 cursor-not-allowed"
+                : "border-white/40 text-white/80 hover:bg-white/10 hover:border-white/60"
+            }`}
+          >
+            {exporting ? (
+              <>
+                <div className="w-3 h-3 border border-white/40 border-t-transparent rounded-full animate-spin" />
+                Exporting…
+              </>
+            ) : (
+              <>↓ Export XLSX</>
+            )}
+          </button>
           <button
             onClick={() => void handleGenerateAll()}
             disabled={generatingAll || generatingOne !== null}

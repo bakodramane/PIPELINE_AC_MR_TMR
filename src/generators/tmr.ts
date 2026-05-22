@@ -89,6 +89,7 @@ const MAX_TOKENS = 1024;
  */
 const SUB_TABLE_MAX_TOKENS: Record<number, number> = {
   3: 1500,
+  8: 1500,
   17: 1500,
 };
 

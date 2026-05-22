@@ -690,3 +690,71 @@ Write-Host "First 3 bytes: $($bytes[0]) $($bytes[1]) $($bytes[2])"
 - `src/screens/ProjectList.tsx` — inline new-project form wired to `create_project` invoke
 
 NEXT SESSION (16): Add PDF/document ingestion to source indexing — allow drag-dropping or file-picking PDFs into a project's `sources/` directory and extracting text into `evidence/pages/`.
+
+---
+
+## Session 16 — T8 token fix + TMR/MR export (XLSX + Markdown)
+
+**Goals accomplished:**
+1. Fix sub_table_8 truncation (one-line token budget change)
+2. TMR Excel export via new `exportTmr` generator + `export_project` Tauri command
+3. MR Markdown export via new `exportMr` generator + same Tauri command
+
+**Goal 1 — ST8 token budget:**
+Added `8: 1500` to `SUB_TABLE_MAX_TOKENS` in `src/generators/tmr.ts`.  The Pakistan
+audit log showed `truncated: true` + `parse_failed: true` on sub_table_8 (Sex of
+agricultural holder, 7 rows × 2 cols = 14 cells) — identical root cause to ST3 and
+ST17 fixed in Session 11.  Map now reads `{ 3: 1500, 8: 1500, 17: 1500 }`.
+
+**Goal 2 — TMR XLSX export:**
+
+`src/generators/export-tmr.ts`:
+- Reads `drafts/tmr/_cells.json` and `src/concepts/wca-2020.json`
+- Uses SheetJS (`xlsx` 0.18.5, added to `dependencies` in `package.json`)
+- Builds one sheet "TMR_Results" with merged title + universe rows, grey column-header row, one data row per WCA row label
+- Cell value rules: numbers as numbers, missing-value codes as strings, ungenerated sub-tables → single merged row "— not yet generated"
+- Basic formatting via SheetJS `cell.s` property: bold title/header cells, grey fill (`#E8E8E8`) on column headers, right-aligned numeric cells
+- Output path: `exports/<iso3>-tmr-<YYYY-MM-DD>.xlsx`
+
+**Goal 3 — MR Markdown export:**
+
+`src/generators/export-mr.ts`:
+- Reads `drafts/mr/_claims.json` + `manifest.json`
+- Imports `MR_SECTION_TITLES` from `src/types/ui` (safe in Node: no browser APIs)
+- Produces structured Markdown: H1 country/census title, H2 "Metadata Review", H3 per section, claims with `> Source: <page_id>, p.<N>` references
+- Empty sections → WCA boilerplate: `*Information on this point was not available...*`
+- Output path: `exports/<iso3>-mr-<YYYY-MM-DD>.md`
+
+**CLI wrapper `src-tauri/scripts/export.mjs`:**
+- Node ESM script, invoked via tsx: `node <tsx-cli.mjs> export.mjs --project ... --type tmr|mr`
+- Dynamic imports `export-tmr.ts` / `export-mr.ts` via tsx module loader (handles `.ts` extension)
+- Stdout protocol: `DONE:<output_path>` on success, `ERROR:<message>` on failure; exits 0
+
+**Tauri command `export_project`:**
+Added to `src-tauri/src/lib.rs`:
+- `async fn export_project(app, project_dir: String, export_type: String) -> Result<String, String>`
+- Spawns `node <tsx-cli.mjs> export.mjs --project ... --type ...` via tauri-plugin-shell
+- Reads stdout for `DONE:<path>` → returns path; `ERROR:<msg>` → returns Err
+- Registered in `generate_handler![..., export_project]`
+
+**Frontend export buttons:**
+- `TmrReview.tsx`: "↓ Export XLSX" button added to the left of "↻ Generate all sub-tables" in header bar. Outline style (`border-white/40 text-white/80`) distinguishes it from the generate button. Disabled while generating.
+- `MrReview.tsx`: "↓ Export MD" button added to the left of "↻ Generate all sections" — same pattern.
+- Both: spinner while running, `onToast` success with filename only (not full path), `onToast` error on failure.
+
+**Files changed:**
+- `src/generators/tmr.ts` — `SUB_TABLE_MAX_TOKENS`: added `8: 1500`
+- `src/generators/export-tmr.ts` — NEW: TMR → XLSX export
+- `src/generators/export-mr.ts` — NEW: MR → Markdown export
+- `src-tauri/scripts/export.mjs` — NEW: export CLI wrapper (invoked by Tauri via tsx)
+- `src-tauri/src/lib.rs` — added `export_project` async command + registered in handler
+- `src/screens/TmrReview.tsx` — "↓ Export XLSX" button + `exporting` state + `handleExport`
+- `src/screens/MrReview.tsx` — "↓ Export MD" button + `exporting` state + `handleExport`
+- `package.json` / `package-lock.json` — `xlsx: ^0.18.5` added to dependencies
+
+**BOM note:** Export files are written by Rust (manifest read) then by Node `fs/promises.writeFile`
+(UTF-8 string) — no BOM. The `xlsx` package's `XLSX.write(..., {type:"buffer"})` returns a raw
+`Buffer` written via `fs.writeFile`; no BOM is possible.
+
+NEXT SESSION (17): PDF/document ingestion — drag-drop or file-pick PDFs into `sources/`, index
+pages into `evidence/pages/` so generators can retrieve evidence for new country projects.

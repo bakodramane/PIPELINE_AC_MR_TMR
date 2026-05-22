@@ -262,6 +262,86 @@ async fn generate_tmr_subtable(
 }
 
 // ---------------------------------------------------------------------------
+// Export command
+// ---------------------------------------------------------------------------
+
+/// Export a country project to a file.
+///
+/// `export_type == "tmr"` → writes exports/<iso3>-tmr-<date>.xlsx via exportTmr
+/// `export_type == "mr"`  → writes exports/<iso3>-mr-<date>.md   via exportMr
+///
+/// Spawns: node <tsx-cli.mjs> <src-tauri/scripts/export.mjs> --project ... --type ...
+/// Reads stdout for `DONE:<path>` and returns that path.
+/// Returns Err if `ERROR:<msg>` is received or the process exits without output.
+#[tauri::command]
+async fn export_project(
+    app: tauri::AppHandle,
+    project_dir: String,
+    export_type: String,
+) -> Result<String, String> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
+    let root = manifest
+        .parent()
+        .expect("src-tauri must have a parent directory")
+        .to_path_buf(); // …/PIPELINE
+
+    let tsx_cli = root
+        .join("node_modules")
+        .join("tsx")
+        .join("dist")
+        .join("cli.mjs");
+    let script = manifest.join("scripts").join("export.mjs");
+
+    let args = vec![
+        tsx_cli.to_string_lossy().into_owned(),
+        script.to_string_lossy().into_owned(),
+        "--project".to_string(),
+        project_dir,
+        "--type".to_string(),
+        export_type,
+    ];
+
+    let (mut rx, _child) = app
+        .shell()
+        .command("node")
+        .args(&args)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn export: {e}"))?;
+
+    let mut buf = String::new();
+    let mut output_path = String::new();
+    let mut error_msg = String::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim_end_matches('\r').to_string();
+                    buf = buf[pos + 1..].to_string();
+                    if let Some(rest) = line.strip_prefix("DONE:") {
+                        output_path = rest.trim().to_string();
+                    } else if let Some(rest) = line.strip_prefix("ERROR:") {
+                        error_msg = rest.trim().to_string();
+                    }
+                }
+            }
+            CommandEvent::Stderr(_) => {}
+            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            _ => {}
+        }
+    }
+
+    if !error_msg.is_empty() {
+        Err(error_msg)
+    } else if !output_path.is_empty() {
+        Ok(output_path)
+    } else {
+        Err("Export completed with no output path reported".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Create project command
 // ---------------------------------------------------------------------------
 
@@ -330,7 +410,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             generate_mr_sections,
             generate_tmr_subtable,
-            create_project
+            create_project,
+            export_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");
