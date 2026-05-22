@@ -1,4 +1,4 @@
-/// AgCensus Compiler — Tauri backend.
+/// AgCensus Compiler ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Tauri backend.
 ///
 /// Session 14: wires the "Generate all" buttons to real Node.js generators
 /// via tauri-plugin-shell.
@@ -22,7 +22,7 @@ use tauri_plugin_shell::ShellExt;
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
-// Event payload — serialised and forwarded to the frontend
+// Event payload ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â serialised and forwarded to the frontend
 // ---------------------------------------------------------------------------
 
 /// Payload of the "generation-progress" global Tauri event.
@@ -48,11 +48,11 @@ struct GenerationProgressPayload {
 /// CARGO_MANIFEST_DIR is the compile-time path to `src-tauri/`.
 /// Its parent is the PIPELINE root, where node_modules lives.
 fn generator_paths() -> (PathBuf, PathBuf) {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/src-tauri
     let root = manifest
         .parent()
         .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // …/PIPELINE
+        .to_path_buf(); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/PIPELINE
     let tsx_cli = root
         .join("node_modules")
         .join("tsx")
@@ -68,8 +68,8 @@ fn generator_paths() -> (PathBuf, PathBuf) {
 
 /// Generate one or all MR sections.
 ///
-/// `section == None`    → generate all 15 sections sequentially
-/// `section == Some(n)` → generate section n only
+/// `section == None`    ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate all 15 sections sequentially
+/// `section == Some(n)` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate section n only
 #[tauri::command]
 async fn generate_mr_sections(
     app: tauri::AppHandle,
@@ -148,11 +148,11 @@ async fn generate_mr_sections(
                             },
                         );
                     }
-                    // STATUS: lines are informational — not forwarded as events
+                    // STATUS: lines are informational ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not forwarded as events
                 }
             }
             CommandEvent::Stderr(_) => {
-                // Ignore stderr — generator errors surface via ERROR: stdout lines
+                // Ignore stderr ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â generator errors surface via ERROR: stdout lines
             }
             CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
             _ => {}
@@ -168,8 +168,8 @@ async fn generate_mr_sections(
 
 /// Generate one or all TMR sub-tables.
 ///
-/// `sub_table_number == 0`  → generate all 23 sub-tables sequentially
-/// `sub_table_number >= 1`  → generate that sub-table only
+/// `sub_table_number == 0`  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate all 23 sub-tables sequentially
+/// `sub_table_number >= 1`  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate that sub-table only
 #[tauri::command]
 async fn generate_tmr_subtable(
     app: tauri::AppHandle,
@@ -267,8 +267,8 @@ async fn generate_tmr_subtable(
 
 /// Export a country project to a file.
 ///
-/// `export_type == "tmr"` → writes exports/<iso3>-tmr-<date>.xlsx via exportTmr
-/// `export_type == "mr"`  → writes exports/<iso3>-mr-<date>.md   via exportMr
+/// `export_type == "tmr"` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ writes exports/<iso3>-tmr-<date>.xlsx via exportTmr
+/// `export_type == "mr"`  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ writes exports/<iso3>-mr-<date>.md   via exportMr
 ///
 /// Spawns: node <tsx-cli.mjs> <src-tauri/scripts/export.mjs> --project ... --type ...
 /// Reads stdout for `DONE:<path>` and returns that path.
@@ -279,11 +279,11 @@ async fn export_project(
     project_dir: String,
     export_type: String,
 ) -> Result<String, String> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/src-tauri
     let root = manifest
         .parent()
         .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // …/PIPELINE
+        .to_path_buf(); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/PIPELINE
 
     let tsx_cli = root
         .join("node_modules")
@@ -376,7 +376,7 @@ fn save_mr_section(
     let mut new_section: serde_json::Value = serde_json::from_str(&claims_json)
         .map_err(|e| format!("Failed to parse claims_json: {e}"))?;
 
-    // Editing resets the approved flag — guard against approving stale content.
+    // Editing resets the approved flag ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â guard against approving stale content.
     if let Some(obj) = new_section.as_object_mut() {
         obj.insert("approved".to_string(), serde_json::Value::Bool(false));
     }
@@ -425,7 +425,7 @@ fn approve_mr_section(
     let key = format!("section_{section_number}");
     if all_claims.get(&key).is_none() {
         return Err(format!(
-            "Section {section_number} not found — generate it before approving."
+            "Section {section_number} not found ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â generate it before approving."
         ));
     }
 
@@ -453,9 +453,11 @@ fn approve_mr_section(
 /// Used by the Audit log viewer to open a JSONL file in the system's
 /// default text editor.  Delegates to tauri-plugin-shell's `open()`.
 #[tauri::command]
-fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    app.shell()
-        .open(&path, None::<String>)
+fn open_path(path: String) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
@@ -465,17 +467,17 @@ fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
 
 /// Create a new country project directory with all required subdirectories and
 /// skeleton JSON files.  Uses Rust std::fs so every file is written as raw
-/// UTF-8 bytes — no BOM, unlike PowerShell WriteAllText.
+/// UTF-8 bytes ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no BOM, unlike PowerShell WriteAllText.
 ///
 /// Directories created:
 ///   evidence/pages  evidence/tables  drafts/mr  drafts/tmr  sources  audit
 ///
 /// Files written:
-///   manifest.json              ← the JSON string passed in
-///   evidence/_evidence.json    ← {"pages":[],"tables":[]}
-///   drafts/mr/_claims.json     ← {}
-///   drafts/tmr/_cells.json     ← {}
-///   sources/_index.json        ← []
+///   manifest.json              ÃƒÂ¢Ã¢â‚¬Â Ã‚Â the JSON string passed in
+///   evidence/_evidence.json    ÃƒÂ¢Ã¢â‚¬Â Ã‚Â {"pages":[],"tables":[]}
+///   drafts/mr/_claims.json     ÃƒÂ¢Ã¢â‚¬Â Ã‚Â {}
+///   drafts/tmr/_cells.json     ÃƒÂ¢Ã¢â‚¬Â Ã‚Â {}
+///   sources/_index.json        ÃƒÂ¢Ã¢â‚¬Â Ã‚Â []
 #[tauri::command]
 fn create_project(project_dir: String, manifest: String) -> Result<String, String> {
     use std::fs;
