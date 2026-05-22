@@ -624,3 +624,69 @@ Node installed and run from the source checkout, the current approach is suffici
 NEXT SESSION (14): Wire `generate_mr_sections` and `generate_tmr_subtable` to actual
 Node.js generation via Tauri sidecar or shell_execute. Consider running generation in
 a background thread with progress events streamed back via Tauri events.
+
+---
+
+## Session 15 — BOM-free project creation + §2 token audit
+
+**Goals:**
+1. Audit §2 empty-section root cause — confirm sidecar does not cap `maxTokens` below what `SECTION_MAX_TOKENS` specifies.
+2. Replace PowerShell-based project creation (which writes UTF-8 WITH BOM via `WriteAllText`) with a Rust Tauri command that writes raw bytes — no BOM.
+
+**Goal 1 — §2 token audit (no code change required):**
+
+Investigation confirmed the generation chain is correct end-to-end:
+- `generate.ts` calls `generateSection(args.project, n, args.model)` — exactly 3 params, no `maxTokens` argument.
+- `generateSection` signature is `(projectDir, sectionNumber, model)` — no 4th param exists.
+- Inside `mr.ts`, line 400: `const maxTokens = SECTION_MAX_TOKENS[sectionNumber] ?? 1024;`
+- `SECTION_MAX_TOKENS = { 2: 1500, 4: 1500, 7: 1500, 10: 1500, 13: 1500 }` — §2 already at 1500 tokens.
+
+**Conclusion:** The sidecar never overrides the token budget; the architecture is already correct. If §2 is empty it is a retrieval or LLM issue, not a token cap.
+
+**Goal 2 — BOM-free project creation:**
+
+Root cause: PowerShell `[System.IO.File]::WriteAllText` defaults to UTF-8 WITH BOM (bytes 239 187 191). JSON parsers (and the app's `useProjects` hook) reject BOM-prefixed files.
+
+Solution — new `create_project` Tauri command in `src-tauri/src/lib.rs`:
+
+```rust
+#[tauri::command]
+fn create_project(project_dir: String, manifest: String) -> Result<String, String>
+```
+
+- Accepts the project directory path and the manifest JSON string from the frontend.
+- Creates subdirectories: `evidence/pages`, `evidence/tables`, `drafts/mr`, `drafts/tmr`, `sources`, `audit`.
+- Writes skeleton files using `std::fs::write(path, bytes)` — raw bytes, NO BOM:
+  - `manifest.json` ← manifest JSON string as UTF-8 bytes
+  - `evidence/_evidence.json` ← `{"pages":[],"tables":[]}`
+  - `drafts/mr/_claims.json` ← `{}`
+  - `drafts/tmr/_cells.json` ← `{}`
+  - `sources/_index.json` ← `[]`
+- Returns `Ok(project_dir)` on success; `Err(message)` on any I/O failure.
+- Registered in `tauri::generate_handler![generate_mr_sections, generate_tmr_subtable, create_project]`.
+- No Tauri capability changes needed — Rust backend has unrestricted filesystem access.
+
+**Frontend — `src/screens/ProjectList.tsx`:**
+
+- Added `invoke` import from `@tauri-apps/api/core`.
+- Added `joinProjectPath(base, name)` helper — detects `\` vs `/` separator from base path.
+- Added `METHODOLOGY_OPTIONS` constant: sample-based / classical / register-based / complete enumeration / modular / integrated.
+- Added `NewProjectFormData` interface and `NewProjectForm` component — inline card form with 6 fields: country, ISO3, census name, reference year, methodology type (select), statistical unit (pre-filled "agricultural holding").
+- Added `showNewProjectForm` + `creating` state in `ProjectList`.
+- Added `handleCreateProject(data)` async handler — constructs `<Country>-<Year>` directory name, builds manifest JSON, invokes `create_project`, shows success toast, calls `refresh()`.
+- `+ New project` button now toggles the form open/closed (becomes `✕ Cancel` when open) instead of showing a placeholder toast.
+- Form appears inline above the project grid inside `<main>` — no modal.
+
+**BOM verification (run in PowerShell after creating a project):**
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes("C:\Users\Dramane\Documents\AgCensus\Pakistan-2024\manifest.json")
+Write-Host "First 3 bytes: $($bytes[0]) $($bytes[1]) $($bytes[2])"
+# BOM-free: 123 10 32  ('{', newline, space)
+# BOM present: 239 187 191  (← bad, old PowerShell behaviour)
+```
+
+**Files changed:**
+- `src-tauri/src/lib.rs` — added `create_project` sync command + registered in handler
+- `src/screens/ProjectList.tsx` — inline new-project form wired to `create_project` invoke
+
+NEXT SESSION (16): Add PDF/document ingestion to source indexing — allow drag-dropping or file-picking PDFs into a project's `sources/` directory and extracting text into `evidence/pages/`.

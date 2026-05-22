@@ -3,12 +3,45 @@
  *
  * Displays all country projects found in the AgCensus base directory as cards
  * showing: country, census round, MR/TMR completion status, and last modified
- * date.  Clicking a card navigates to the MR section review screen.
+ * date.  Clicking a card navigates to the project overview screen.
+ *
+ * Session 15: "+ New project" now shows an inline form that invokes the
+ * `create_project` Tauri command, which writes BOM-free UTF-8 files via Rust
+ * std::fs (no PowerShell WriteAllText BOM byte-order-mark issue).
  */
 
 import { useState, type FC } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useProjects } from "../hooks/useProjects";
 import type { ProjectInfo, ToastMessage } from "../types/ui";
+
+// ---------------------------------------------------------------------------
+// Helpers & constants for new project form
+// ---------------------------------------------------------------------------
+
+/** Build an absolute project path from a base dir + folder name. */
+function joinProjectPath(base: string, name: string): string {
+  const sep = base.includes("\\") ? "\\" : "/";
+  return `${base.replace(/[/\\]+$/, "")}${sep}${name}`;
+}
+
+const METHODOLOGY_OPTIONS = [
+  "sample-based",
+  "classical",
+  "register-based",
+  "complete enumeration",
+  "modular",
+  "integrated",
+] as const;
+
+interface NewProjectFormData {
+  country: string;
+  iso3: string;
+  censusName: string;
+  referenceYear: string;
+  methodologyType: string;
+  statisticalUnit: string;
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -35,10 +68,7 @@ function StatusBar({
   label: string;
   color: "green" | "blue";
 }) {
-  const barColor =
-    color === "green"
-      ? "bg-[#1B4F23]"
-      : "bg-blue-600";
+  const barColor = color === "green" ? "bg-[#1B4F23]" : "bg-blue-600";
   const emptyColor = "bg-gray-200";
   const pct = total > 0 ? Math.round((ok / total) * 100) : 0;
   return (
@@ -90,10 +120,16 @@ function ProjectCard({
   project: ProjectInfo;
   onClick: () => void;
 }) {
-  const { manifest, mrSectionsOk, mrSectionsTotal, tmrSubTablesOk, tmrSubTablesTotal } =
-    project;
-  const methodShort =
-    manifest.methodology_type.replace("complete enumeration", "complete enum.").slice(0, 24);
+  const {
+    manifest,
+    mrSectionsOk,
+    mrSectionsTotal,
+    tmrSubTablesOk,
+    tmrSubTablesTotal,
+  } = project;
+  const methodShort = manifest.methodology_type
+    .replace("complete enumeration", "complete enum.")
+    .slice(0, 24);
 
   return (
     <button
@@ -125,8 +161,18 @@ function ProjectCard({
 
       {/* Status bars */}
       <div className="space-y-1.5">
-        <StatusBar ok={mrSectionsOk} total={mrSectionsTotal} label="MR" color="green" />
-        <StatusBar ok={tmrSubTablesOk} total={tmrSubTablesTotal} label="TMR" color="blue" />
+        <StatusBar
+          ok={mrSectionsOk}
+          total={mrSectionsTotal}
+          label="MR"
+          color="green"
+        />
+        <StatusBar
+          ok={tmrSubTablesOk}
+          total={tmrSubTablesTotal}
+          label="TMR"
+          color="blue"
+        />
       </div>
     </button>
   );
@@ -190,7 +236,13 @@ function Spinner() {
 }
 
 /** Error state. */
-function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ErrorState({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
   return (
     <div className="flex flex-col items-center justify-center py-24 text-center px-6">
       <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center mb-4">
@@ -276,6 +328,179 @@ function ChangeDirModal({
 }
 
 // ---------------------------------------------------------------------------
+// New project inline form
+// ---------------------------------------------------------------------------
+
+function NewProjectForm({
+  onSubmit,
+  onCancel,
+  creating,
+}: {
+  onSubmit: (data: NewProjectFormData) => void;
+  onCancel: () => void;
+  creating: boolean;
+}) {
+  const [form, setForm] = useState<NewProjectFormData>({
+    country: "",
+    iso3: "",
+    censusName: "",
+    referenceYear: "",
+    methodologyType: "sample-based",
+    statisticalUnit: "agricultural holding",
+  });
+
+  function setField(field: keyof NewProjectFormData, value: string) {
+    setForm((f) => ({ ...f, [field]: value }));
+  }
+
+  const valid = Boolean(
+    form.country.trim() &&
+      form.iso3.trim().length === 3 &&
+      form.censusName.trim() &&
+      form.referenceYear.trim(),
+  );
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (valid) onSubmit(form);
+      }}
+      className="bg-white border border-[#1B4F23]/30 rounded-lg p-5 mb-6 shadow-sm"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-900">New project</h2>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        {/* Country */}
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Country
+          </label>
+          <input
+            type="text"
+            value={form.country}
+            onChange={(e) => setField("country", e.target.value)}
+            placeholder="e.g. Pakistan"
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+
+        {/* ISO3 */}
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            ISO3 code
+          </label>
+          <input
+            type="text"
+            value={form.iso3}
+            onChange={(e) => setField("iso3", e.target.value.slice(0, 3))}
+            placeholder="e.g. PAK"
+            maxLength={3}
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-mono uppercase focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+
+        {/* Census name */}
+        <div className="sm:col-span-2">
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Census name
+          </label>
+          <input
+            type="text"
+            value={form.censusName}
+            onChange={(e) => setField("censusName", e.target.value)}
+            placeholder="e.g. Pakistan Agriculture Census 2024"
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+
+        {/* Reference year */}
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Reference year
+          </label>
+          <input
+            type="text"
+            value={form.referenceYear}
+            onChange={(e) => setField("referenceYear", e.target.value)}
+            placeholder="e.g. 2024"
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+
+        {/* Methodology type */}
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Methodology type
+          </label>
+          <select
+            value={form.methodologyType}
+            onChange={(e) => setField("methodologyType", e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23] bg-white"
+          >
+            {METHODOLOGY_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Statistical unit */}
+        <div className="sm:col-span-2">
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Statistical unit
+          </label>
+          <input
+            type="text"
+            value={form.statisticalUnit}
+            onChange={(e) => setField("statisticalUnit", e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={!valid || creating}
+          className="px-4 py-2 text-sm bg-[#1B4F23] text-white rounded-lg hover:bg-[#163d1c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+        >
+          {creating ? (
+            <>
+              <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+              Creating…
+            </>
+          ) : (
+            "Create project"
+          )}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
 
@@ -283,14 +508,61 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
   const { projects, loading, error, baseDir, setBaseDir, refresh } =
     useProjects();
   const [showChangeDirModal, setShowChangeDirModal] = useState(false);
-
-  function handlePlaceholderAction(label: string) {
-    onToast(`${label} is coming in a future session.`, "info");
-  }
+  const [showNewProjectForm, setShowNewProjectForm] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   function handleSaveDir(dir: string) {
     setBaseDir(dir);
     setShowChangeDirModal(false);
+  }
+
+  async function handleCreateProject(data: NewProjectFormData) {
+    if (!baseDir) {
+      onToast("Set a project folder first.", "warning");
+      return;
+    }
+    setCreating(true);
+    try {
+      const safeName = data.country
+        .replace(/[^\w\s-]/g, "")
+        .replace(/\s+/g, "-");
+      const safeYear = data.referenceYear.replace(/\//g, "-");
+      const projectDir = joinProjectPath(baseDir, `${safeName}-${safeYear}`);
+
+      const manifest = JSON.stringify(
+        {
+          schema_version: "1.0",
+          country: data.country,
+          country_iso3: data.iso3.toUpperCase(),
+          census_round: "WCA 2020",
+          census_name: data.censusName,
+          reference_year: data.referenceYear,
+          reference_day: "day of interview",
+          methodology_type: data.methodologyType,
+          statistical_unit: data.statisticalUnit,
+          lower_size_threshold: "",
+          national_statistical_office: "",
+          source_documents: [],
+          compiled_by: "",
+          compiled_at: new Date().toISOString(),
+          app_version: "1.0.0",
+        },
+        null,
+        2,
+      );
+
+      await invoke("create_project", { projectDir, manifest });
+      onToast(
+        `Project "${data.country} ${data.referenceYear}" created.`,
+        "success",
+      );
+      setShowNewProjectForm(false);
+      refresh();
+    } catch (err) {
+      onToast(`Failed to create project: ${String(err)}`, "error");
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -327,16 +599,22 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
             ↻ Refresh
           </button>
           <button
-            onClick={() => handlePlaceholderAction("Import bundle")}
+            onClick={() =>
+              onToast("Import bundle is coming in a future session.", "info")
+            }
             className="text-xs text-green-200 hover:text-white border border-green-700 hover:border-green-400 rounded px-2.5 py-1.5 transition-colors"
           >
             Import bundle
           </button>
           <button
-            onClick={() => handlePlaceholderAction("New project")}
-            className="text-xs bg-white text-[#1B4F23] font-semibold rounded px-3 py-1.5 hover:bg-green-50 transition-colors"
+            onClick={() => setShowNewProjectForm((v) => !v)}
+            className={`text-xs font-semibold rounded px-3 py-1.5 transition-colors ${
+              showNewProjectForm
+                ? "bg-white/20 text-white border border-white/30"
+                : "bg-white text-[#1B4F23] hover:bg-green-50"
+            }`}
           >
-            + New project
+            {showNewProjectForm ? "✕ Cancel" : "+ New project"}
           </button>
         </div>
       </header>
@@ -351,6 +629,15 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
 
       {/* Main content */}
       <main className="max-w-5xl mx-auto px-6 py-6">
+        {/* Inline new-project form — shown above the project grid */}
+        {showNewProjectForm && (
+          <NewProjectForm
+            onSubmit={handleCreateProject}
+            onCancel={() => setShowNewProjectForm(false)}
+            creating={creating}
+          />
+        )}
+
         {loading ? (
           <Spinner />
         ) : error ? (

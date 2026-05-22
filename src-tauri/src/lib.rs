@@ -262,6 +262,63 @@ async fn generate_tmr_subtable(
 }
 
 // ---------------------------------------------------------------------------
+// Create project command
+// ---------------------------------------------------------------------------
+
+/// Create a new country project directory with all required subdirectories and
+/// skeleton JSON files.  Uses Rust std::fs so every file is written as raw
+/// UTF-8 bytes — no BOM, unlike PowerShell WriteAllText.
+///
+/// Directories created:
+///   evidence/pages  evidence/tables  drafts/mr  drafts/tmr  sources  audit
+///
+/// Files written:
+///   manifest.json              ← the JSON string passed in
+///   evidence/_evidence.json    ← {"pages":[],"tables":[]}
+///   drafts/mr/_claims.json     ← {}
+///   drafts/tmr/_cells.json     ← {}
+///   sources/_index.json        ← []
+#[tauri::command]
+fn create_project(project_dir: String, manifest: String) -> Result<String, String> {
+    use std::fs;
+    use std::path::Path;
+
+    let base = Path::new(&project_dir);
+
+    for dir in &[
+        "evidence/pages",
+        "evidence/tables",
+        "drafts/mr",
+        "drafts/tmr",
+        "sources",
+        "audit",
+    ] {
+        fs::create_dir_all(base.join(dir))
+            .map_err(|e| format!("Failed to create directory '{dir}': {e}"))?;
+    }
+
+    fs::write(base.join("manifest.json"), manifest.as_bytes())
+        .map_err(|e| format!("Failed to write manifest.json: {e}"))?;
+
+    fs::write(
+        base.join("evidence/_evidence.json"),
+        br#"{"pages":[],"tables":[]}"#,
+    )
+    .map_err(|e| format!("Failed to write evidence/_evidence.json: {e}"))?;
+
+    fs::write(base.join("drafts/mr/_claims.json"), b"{}")
+        .map_err(|e| format!("Failed to write drafts/mr/_claims.json: {e}"))?;
+
+    fs::write(base.join("drafts/tmr/_cells.json"), b"{}")
+        .map_err(|e| format!("Failed to write drafts/tmr/_cells.json: {e}"))?;
+
+    fs::write(base.join("sources/_index.json"), b"[]")
+        .map_err(|e| format!("Failed to write sources/_index.json: {e}"))?;
+
+    Ok(project_dir)
+}
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
@@ -272,7 +329,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             generate_mr_sections,
-            generate_tmr_subtable
+            generate_tmr_subtable,
+            create_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");
