@@ -28,6 +28,8 @@ import type {
   ValidationFlagDisplay,
 } from "../types/ui";
 import wcaData from "../concepts/wca-2020.json";
+import { MODELS_BY_TIER, DEFAULT_TMR_MODEL, getModelInfo } from "../providers/model-registry";
+import type { Model } from "../providers/types";
 
 // ---------------------------------------------------------------------------
 // WCA 2020 type helpers
@@ -584,6 +586,11 @@ const TmrReview: FC<TmrReviewProps> = ({
     total: number;
   } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<Model>(
+    () =>
+      (localStorage.getItem("agcensus_tmr_model") as Model | null) ??
+      DEFAULT_TMR_MODEL,
+  );
 
   // ── Load _cells.json ──────────────────────────────────────────────────────
 
@@ -690,7 +697,7 @@ const TmrReview: FC<TmrReviewProps> = ({
       const result = await invoke<string>("generate_tmr_subtable", {
         projectDir,
         subTableNumber: 0, // 0 = all
-        model: "deepseek-v4-flash",
+        model: selectedModel,
       });
       onToast(`Generation complete — ${result}.`, "success");
     } catch (err) {
@@ -728,7 +735,7 @@ const TmrReview: FC<TmrReviewProps> = ({
       const result = await invoke<string>("generate_tmr_subtable", {
         projectDir,
         subTableNumber,
-        model: "deepseek-v4-flash",
+        model: selectedModel,
       });
       onToast(result, "success");
     } catch (err) {
@@ -811,6 +818,63 @@ const TmrReview: FC<TmrReviewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Model selector bar */}
+      <div className="bg-[#163d1c] border-b border-green-900/60 px-6 py-2">
+        <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-green-300 shrink-0">Model</span>
+            <select
+              value={selectedModel}
+              onChange={(e) => {
+                const m = e.target.value as Model;
+                setSelectedModel(m);
+                localStorage.setItem("agcensus_tmr_model", m);
+              }}
+              disabled={generatingAll || generatingOne !== null}
+              className="text-xs text-white bg-transparent border border-green-700 rounded-lg px-2 py-1 focus:outline-none disabled:opacity-50 cursor-pointer"
+            >
+              {([1, 2, 3] as const).map((tier) => (
+                <optgroup
+                  key={tier}
+                  label={
+                    tier === 1
+                      ? "── Budget"
+                      : tier === 2
+                      ? "── Mid-range"
+                      : "── Premium"
+                  }
+                >
+                  {MODELS_BY_TIER[tier].map((m) => (
+                    <option
+                      key={m.model}
+                      value={m.model}
+                      className="text-gray-900 bg-white"
+                    >
+                      {m.displayName}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          {(() => {
+            const info = getModelInfo(selectedModel);
+            if (!info) return null;
+            // TMR estimate: 23 sub-tables × ~1 500 in + 600 out tokens
+            const estIn  = 23 * 1_500;
+            const estOut = 23 * 600;
+            const estCost =
+              (estIn * info.inputCostPerM + estOut * info.outputCostPerM) /
+              1_000_000;
+            return (
+              <span className="text-[10px] text-green-400 shrink-0">
+                Est. TMR cost: ~${estCost.toFixed(3)} · 23 sub-tables
+              </span>
+            );
+          })()}
+        </div>
+      </div>
 
       {/* Generation progress bar */}
       {generatingAll && genProgress && (

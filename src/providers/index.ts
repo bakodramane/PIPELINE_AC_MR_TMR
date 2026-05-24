@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import rawPricing from "./pricing.json";
 import { callDeepSeek } from "./deepseek";
 import { callKimi } from "./kimi";
+import { callGoogle } from "./google";
+import { callOpenAI } from "./openai";
+import { callAnthropic } from "./anthropic";
 import type {
   Provider,
   Model,
@@ -16,24 +19,44 @@ export type { Provider, Model, GenerateOptions, GenerateResult } from "./types";
 const pricing = rawPricing as unknown as Record<string, ModelPricing>;
 
 // ---------------------------------------------------------------------------
+// Provider routing
+// ---------------------------------------------------------------------------
+
+function getProvider(model: Model): Provider {
+  if (model.startsWith("deepseek-")) return "deepseek";
+  if (model.startsWith("kimi-")) return "kimi";
+  if (model.startsWith("gemini-")) return "google";
+  if (model.startsWith("gpt-")) return "openai";
+  if (model.startsWith("claude-")) return "anthropic";
+  throw new Error(`Unknown provider for model: ${model}`);
+}
+
+function envVarForProvider(provider: Provider): string {
+  switch (provider) {
+    case "deepseek":   return "DEEPSEEK_API_KEY";
+    case "kimi":       return "KIMI_API_KEY";
+    case "google":     return "GOOGLE_API_KEY";
+    case "openai":     return "OPENAI_API_KEY";
+    case "anthropic":  return "ANTHROPIC_API_KEY";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // API key resolution
-// In the Tauri runtime, keys come from the OS keychain (step 18).
+// In the Tauri runtime, keys come from the OS store (passed via --api-key arg
+// by the Rust backend or set in process.env by generate.ts).
 // In Node test environments (Vitest / CI), env vars are used.
 // ---------------------------------------------------------------------------
 
 async function resolveApiKey(provider: Provider): Promise<string> {
   if (typeof process !== "undefined") {
-    const envVar =
-      provider === "deepseek" ? "DEEPSEEK_API_KEY" : "KIMI_API_KEY";
+    const envVar = envVarForProvider(provider);
     const key = process.env[envVar];
     if (key) return key;
   }
 
-  // TODO(step-18): invoke Tauri keychain plugin
   throw new Error(
-    `No API key for ${provider}. Set ${
-      provider === "deepseek" ? "DEEPSEEK_API_KEY" : "KIMI_API_KEY"
-    } or configure via Settings.`,
+    `No API key for ${provider}. Set ${envVarForProvider(provider)} or configure via Settings.`,
   );
 }
 
@@ -61,19 +84,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public: generate()
 // ---------------------------------------------------------------------------
 
 export async function generate(
   options: GenerateOptions,
 ): Promise<GenerateResult> {
-  const provider: Provider = options.model.startsWith("deepseek-")
-    ? "deepseek"
-    : "kimi";
-
+  const provider = getProvider(options.model);
   const apiKey = await resolveApiKey(provider);
 
-  const modelPricing = pricing[options.model as Model];
+  const modelPricing = pricing[options.model];
   if (!modelPricing) {
     throw new Error(`Unknown model: ${options.model}`);
   }
@@ -85,9 +105,18 @@ export async function generate(
       await sleep(Math.pow(2, attempt - 1) * 1_000);
     }
     try {
-      return provider === "deepseek"
-        ? await callDeepSeek(options, apiKey, modelPricing)
-        : await callKimi(options, apiKey, modelPricing);
+      switch (provider) {
+        case "deepseek":
+          return await callDeepSeek(options, apiKey, modelPricing);
+        case "kimi":
+          return await callKimi(options, apiKey, modelPricing);
+        case "google":
+          return await callGoogle(options, apiKey, modelPricing);
+        case "openai":
+          return await callOpenAI(options, apiKey, modelPricing);
+        case "anthropic":
+          return await callAnthropic(options, apiKey, modelPricing);
+      }
     } catch (err) {
       lastError = err;
       if (!isTransient(err) || attempt === 2) throw err;
@@ -95,4 +124,72 @@ export async function generate(
   }
 
   throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Public: testApiConnection()
+//
+// Used by the Settings screen to verify a newly entered API key.
+// Makes a minimal single-token request to the cheapest model for each
+// provider.  Works in browser context (dangerouslyAllowBrowser: true is set
+// in each provider module).
+// ---------------------------------------------------------------------------
+
+const TEST_MODELS: Record<Provider, Model> = {
+  deepseek:  "deepseek-v4-flash",
+  kimi:      "kimi-k2.6-non-thinking",
+  google:    "gemini-2.0-flash",
+  openai:    "gpt-4o-mini",
+  anthropic: "claude-opus-4-7",
+};
+
+const TEST_OPTIONS = {
+  systemPrompt: "You are a helpful assistant.",
+  userPrompt:   "Reply with OK.",
+  maxTokens:    8,
+} as const;
+
+export async function testApiConnection(
+  provider: Provider,
+  apiKey: string,
+): Promise<{ success: boolean; latencyMs: number; error?: string }> {
+  const start = Date.now();
+  const model = TEST_MODELS[provider];
+  const modelPricing = pricing[model];
+
+  if (!modelPricing) {
+    return { success: false, latencyMs: 0, error: `No pricing data for ${model}` };
+  }
+
+  const opts: GenerateOptions = {
+    ...TEST_OPTIONS,
+    model,
+  };
+
+  try {
+    switch (provider) {
+      case "deepseek":
+        await callDeepSeek(opts, apiKey, modelPricing);
+        break;
+      case "kimi":
+        await callKimi(opts, apiKey, modelPricing);
+        break;
+      case "google":
+        await callGoogle(opts, apiKey, modelPricing);
+        break;
+      case "openai":
+        await callOpenAI(opts, apiKey, modelPricing);
+        break;
+      case "anthropic":
+        await callAnthropic(opts, apiKey, modelPricing);
+        break;
+    }
+    return { success: true, latencyMs: Date.now() - start };
+  } catch (err) {
+    return {
+      success: false,
+      latencyMs: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

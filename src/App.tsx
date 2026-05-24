@@ -1,14 +1,21 @@
 /**
  * AgCensus Compiler — root component.
  *
- * Manages the four-screen state machine:
+ * Manages the five-screen state machine:
  *   list              → country project list (Screen 1, default)
  *   project-overview  → per-project hub with metrics and nav tabs
  *   mr-review         → MR section review for one project
  *   tmr-review        → TMR sub-table review for one project
+ *   audit-log         → audit event log for one project
+ *   settings          → API keys, default models, project folder
+ *
+ * A fixed gear icon in the bottom-left corner opens Settings from any screen.
+ * Dismissing Settings returns to the screen that was active before.
  *
  * Also hosts the global toast notification system so any screen can
  * surface messages to the user.
+ *
+ * Session 18: added Settings screen + gear icon overlay.
  */
 
 import { useState, useCallback, useEffect } from "react";
@@ -17,18 +24,21 @@ import ProjectOverview from "./screens/ProjectOverview";
 import MrReview from "./screens/MrReview";
 import TmrReview from "./screens/TmrReview";
 import AuditLog from "./screens/AuditLog";
+import Settings from "./screens/Settings";
 import type { ProjectInfo, ToastMessage } from "./types/ui";
 
 // ---------------------------------------------------------------------------
 // Screen state machine
 // ---------------------------------------------------------------------------
 
-type Screen =
+type NonSettingsScreen =
   | { id: "list" }
   | { id: "project-overview"; project: ProjectInfo }
   | { id: "mr-review"; project: ProjectInfo }
   | { id: "tmr-review"; project: ProjectInfo }
   | { id: "audit-log"; project: ProjectInfo };
+
+type Screen = NonSettingsScreen | { id: "settings" };
 
 // ---------------------------------------------------------------------------
 // Toast component
@@ -114,6 +124,10 @@ let _nextToastId = 0;
 export default function App() {
   const [screen, setScreen] = useState<Screen>({ id: "list" });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // Track where to return after closing Settings
+  const [prevScreen, setPrevScreen] = useState<NonSettingsScreen>({
+    id: "list",
+  });
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -136,6 +150,17 @@ export default function App() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [screen]);
+
+  function openSettings() {
+    if (screen.id !== "settings") {
+      setPrevScreen(screen as NonSettingsScreen);
+    }
+    setScreen({ id: "settings" });
+  }
+
+  function closeSettings() {
+    setScreen(prevScreen);
+  }
 
   function renderScreen() {
     switch (screen.id) {
@@ -208,12 +233,32 @@ export default function App() {
             onToast={addToast}
           />
         );
+
+      case "settings":
+        return (
+          <Settings
+            onBack={closeSettings}
+            onToast={addToast}
+          />
+        );
     }
   }
 
   return (
     <>
       {renderScreen()}
+
+      {/* Gear icon — fixed overlay, visible on all non-settings screens */}
+      {screen.id !== "settings" && (
+        <button
+          onClick={openSettings}
+          title="Settings"
+          className="fixed bottom-4 left-4 z-50 w-9 h-9 flex items-center justify-center rounded-full bg-white border border-gray-200 shadow-md text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-colors text-base"
+        >
+          ⚙
+        </button>
+      )}
+
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </>
   );

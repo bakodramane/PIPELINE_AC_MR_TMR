@@ -1,28 +1,21 @@
-/// AgCensus Compiler ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Tauri backend.
+/// AgCensus Compiler — Tauri backend.
 ///
 /// Session 14: wires the "Generate all" buttons to real Node.js generators
 /// via tauri-plugin-shell.
 ///
-/// Each generate_* command spawns:
-///   node <tsx-cli.mjs> <src-tauri/scripts/generate.ts> --project ... --type ... ...
-///
-/// The child process writes one-line tokens to stdout:
-///   STATUS:<msg>          informational
-///   DONE:<n>              section/sub-table n finished successfully
-///   ERROR:<n>:<msg>       section/sub-table n failed
-///
-/// As each line arrives the command emits a "generation-progress" Tauri event
-/// so the frontend can update in real-time.  The command returns Ok(summary)
-/// once the child exits.
+/// Session 18: adds save_api_key / get_api_key commands (tauri-plugin-store),
+/// passes --provider / --api-key args to generator child process, and
+/// registers tauri-plugin-store in the Tauri builder.
 
 use std::path::PathBuf;
 use tauri::Emitter;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_store::StoreExt;
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
-// Event payload ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â serialised and forwarded to the frontend
+// Event payload — serialised and forwarded to the frontend
 // ---------------------------------------------------------------------------
 
 /// Payload of the "generation-progress" global Tauri event.
@@ -48,11 +41,11 @@ struct GenerationProgressPayload {
 /// CARGO_MANIFEST_DIR is the compile-time path to `src-tauri/`.
 /// Its parent is the PIPELINE root, where node_modules lives.
 fn generator_paths() -> (PathBuf, PathBuf) {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/src-tauri
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
     let root = manifest
         .parent()
         .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/PIPELINE
+        .to_path_buf(); // …/PIPELINE
     let tsx_cli = root
         .join("node_modules")
         .join("tsx")
@@ -63,13 +56,62 @@ fn generator_paths() -> (PathBuf, PathBuf) {
 }
 
 // ---------------------------------------------------------------------------
+// Provider helpers
+// ---------------------------------------------------------------------------
+
+fn provider_for_model(model: &str) -> &'static str {
+    if model.starts_with("deepseek-") { return "deepseek"; }
+    if model.starts_with("kimi-")     { return "kimi"; }
+    if model.starts_with("gemini-")   { return "google"; }
+    if model.starts_with("gpt-")      { return "openai"; }
+    if model.starts_with("claude-")   { return "anthropic"; }
+    "deepseek" // safe fallback
+}
+
+/// Read a stored API key from the app store.  Returns None if absent or on error.
+fn read_api_key_from_store(app: &tauri::AppHandle, provider: &str) -> Option<String> {
+    app.store("api_keys.json")
+        .ok()
+        .and_then(|store| store.get(provider))
+        .and_then(|v| v.as_str().map(String::from))
+}
+
+// ---------------------------------------------------------------------------
+// API key commands (Session 18)
+// ---------------------------------------------------------------------------
+
+/// Persist an API key for a provider in the app-local encrypted store.
+///
+/// `provider` must be one of: deepseek | kimi | google | openai | anthropic
+#[tauri::command]
+fn save_api_key(
+    app: tauri::AppHandle,
+    provider: String,
+    key: String,
+) -> Result<(), String> {
+    let store = app.store("api_keys.json").map_err(|e| e.to_string())?;
+    store.set(provider, serde_json::json!(key));
+    store.save().map_err(|e| e.to_string())
+}
+
+/// Read a stored API key for a provider.  Returns None if no key is saved.
+#[tauri::command]
+fn get_api_key(
+    app: tauri::AppHandle,
+    provider: String,
+) -> Result<Option<String>, String> {
+    let store = app.store("api_keys.json").map_err(|e| e.to_string())?;
+    Ok(store.get(&provider).and_then(|v| v.as_str().map(String::from)))
+}
+
+// ---------------------------------------------------------------------------
 // MR command
 // ---------------------------------------------------------------------------
 
 /// Generate one or all MR sections.
 ///
-/// `section == None`    ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate all 15 sections sequentially
-/// `section == Some(n)` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate section n only
+/// `section == None`    → generate all 15 sections sequentially
+/// `section == Some(n)` → generate section n only
 #[tauri::command]
 async fn generate_mr_sections(
     app: tauri::AppHandle,
@@ -78,6 +120,10 @@ async fn generate_mr_sections(
     model: String,
 ) -> Result<String, String> {
     let (tsx_cli, script) = generator_paths();
+
+    // Determine the provider and look up any stored API key
+    let provider = provider_for_model(&model);
+    let api_key  = read_api_key_from_store(&app, provider);
 
     let mut args = vec![
         tsx_cli.to_string_lossy().into_owned(),
@@ -88,7 +134,15 @@ async fn generate_mr_sections(
         "mr".to_string(),
         "--model".to_string(),
         model,
+        "--provider".to_string(),
+        provider.to_string(),
     ];
+
+    // Only pass --api-key when we actually have a stored key; otherwise the
+    // Node script will fall back to process.env / the .env file.
+    if let Some(ref key) = api_key {
+        args.extend(["--api-key".to_string(), key.clone()]);
+    }
 
     let total: u32 = if let Some(n) = section {
         args.extend(["--section".to_string(), n.to_string()]);
@@ -148,11 +202,11 @@ async fn generate_mr_sections(
                             },
                         );
                     }
-                    // STATUS: lines are informational ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not forwarded as events
+                    // STATUS: lines are informational — not forwarded as events
                 }
             }
             CommandEvent::Stderr(_) => {
-                // Ignore stderr ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â generator errors surface via ERROR: stdout lines
+                // Ignore stderr — generator errors surface via ERROR: stdout lines
             }
             CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
             _ => {}
@@ -168,8 +222,8 @@ async fn generate_mr_sections(
 
 /// Generate one or all TMR sub-tables.
 ///
-/// `sub_table_number == 0`  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate all 23 sub-tables sequentially
-/// `sub_table_number >= 1`  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ generate that sub-table only
+/// `sub_table_number == 0`  → generate all 23 sub-tables sequentially
+/// `sub_table_number >= 1`  → generate that sub-table only
 #[tauri::command]
 async fn generate_tmr_subtable(
     app: tauri::AppHandle,
@@ -178,6 +232,9 @@ async fn generate_tmr_subtable(
     model: String,
 ) -> Result<String, String> {
     let (tsx_cli, script) = generator_paths();
+
+    let provider = provider_for_model(&model);
+    let api_key  = read_api_key_from_store(&app, provider);
 
     let mut args = vec![
         tsx_cli.to_string_lossy().into_owned(),
@@ -188,7 +245,13 @@ async fn generate_tmr_subtable(
         "tmr".to_string(),
         "--model".to_string(),
         model,
+        "--provider".to_string(),
+        provider.to_string(),
     ];
+
+    if let Some(ref key) = api_key {
+        args.extend(["--api-key".to_string(), key.clone()]);
+    }
 
     let total: u32 = if sub_table_number == 0 {
         args.push("--all".to_string());
@@ -267,23 +330,19 @@ async fn generate_tmr_subtable(
 
 /// Export a country project to a file.
 ///
-/// `export_type == "tmr"` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ writes exports/<iso3>-tmr-<date>.xlsx via exportTmr
-/// `export_type == "mr"`  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ writes exports/<iso3>-mr-<date>.md   via exportMr
-///
-/// Spawns: node <tsx-cli.mjs> <src-tauri/scripts/export.mjs> --project ... --type ...
-/// Reads stdout for `DONE:<path>` and returns that path.
-/// Returns Err if `ERROR:<msg>` is received or the process exits without output.
+/// `export_type == "tmr"` → writes exports/<iso3>-tmr-<date>.xlsx via exportTmr
+/// `export_type == "mr"`  → writes exports/<iso3>-mr-<date>.md   via exportMr
 #[tauri::command]
 async fn export_project(
     app: tauri::AppHandle,
     project_dir: String,
     export_type: String,
 ) -> Result<String, String> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/src-tauri
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
     let root = manifest
         .parent()
         .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦/PIPELINE
+        .to_path_buf(); // …/PIPELINE
 
     let tsx_cli = root
         .join("node_modules")
@@ -346,13 +405,6 @@ async fn export_project(
 // ---------------------------------------------------------------------------
 
 /// Write updated claims for one MR section back to `drafts/mr/_claims.json`.
-///
-/// `claims_json` is a JSON string of the shape `{ "claims": [...] }`.
-/// The command:
-///   - Reads the full `_claims.json`
-///   - Replaces the `section_<n>` key with the new section data
-///   - Sets `approved: false` on the section (editing resets approval)
-///   - Writes back as pretty-printed JSON with no BOM
 #[tauri::command]
 fn save_mr_section(
     project_dir: String,
@@ -376,7 +428,7 @@ fn save_mr_section(
     let mut new_section: serde_json::Value = serde_json::from_str(&claims_json)
         .map_err(|e| format!("Failed to parse claims_json: {e}"))?;
 
-    // Editing resets the approved flag ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â guard against approving stale content.
+    // Editing resets the approved flag — guard against approving stale content.
     if let Some(obj) = new_section.as_object_mut() {
         obj.insert("approved".to_string(), serde_json::Value::Bool(false));
     }
@@ -400,9 +452,6 @@ fn save_mr_section(
 // ---------------------------------------------------------------------------
 
 /// Set `approved: true` on one MR section in `drafts/mr/_claims.json`.
-///
-/// Fails if the section key does not exist in `_claims.json`
-/// (the section must have been generated before it can be approved).
 #[tauri::command]
 fn approve_mr_section(
     project_dir: String,
@@ -425,7 +474,7 @@ fn approve_mr_section(
     let key = format!("section_{section_number}");
     if all_claims.get(&key).is_none() {
         return Err(format!(
-            "Section {section_number} not found ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â generate it before approving."
+            "Section {section_number} not found — generate it before approving."
         ));
     }
 
@@ -449,9 +498,6 @@ fn approve_mr_section(
 // ---------------------------------------------------------------------------
 
 /// Open a file or directory with the OS default application.
-///
-/// Used by the Audit log viewer to open a JSONL file in the system's
-/// default text editor.  Delegates to tauri-plugin-shell's `open()`.
 #[tauri::command]
 fn open_path(path: String) -> Result<(), String> {
     std::process::Command::new("explorer")
@@ -465,19 +511,8 @@ fn open_path(path: String) -> Result<(), String> {
 // Create project command
 // ---------------------------------------------------------------------------
 
-/// Create a new country project directory with all required subdirectories and
-/// skeleton JSON files.  Uses Rust std::fs so every file is written as raw
-/// UTF-8 bytes ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no BOM, unlike PowerShell WriteAllText.
-///
-/// Directories created:
-///   evidence/pages  evidence/tables  drafts/mr  drafts/tmr  sources  audit
-///
-/// Files written:
-///   manifest.json              ÃƒÂ¢Ã¢â‚¬Â Ã‚Â the JSON string passed in
-///   evidence/_evidence.json    ÃƒÂ¢Ã¢â‚¬Â Ã‚Â {"pages":[],"tables":[]}
-///   drafts/mr/_claims.json     ÃƒÂ¢Ã¢â‚¬Â Ã‚Â {}
-///   drafts/tmr/_cells.json     ÃƒÂ¢Ã¢â‚¬Â Ã‚Â {}
-///   sources/_index.json        ÃƒÂ¢Ã¢â‚¬Â Ã‚Â []
+/// Create a new country project directory with all required subdirectories
+/// and skeleton JSON files.
 #[tauri::command]
 fn create_project(project_dir: String, manifest: String) -> Result<String, String> {
     use std::fs;
@@ -527,6 +562,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             generate_mr_sections,
             generate_tmr_subtable,
@@ -534,7 +570,9 @@ pub fn run() {
             export_project,
             save_mr_section,
             approve_mr_section,
-            open_path
+            open_path,
+            save_api_key,
+            get_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");

@@ -39,10 +39,19 @@ const PIPELINE_ROOT = path.resolve(__dirname, "..", "..");
 // ---------------------------------------------------------------------------
 
 type Model =
+  // Tier 1
   | "deepseek-v4-flash"
+  | "gemini-2.0-flash"
+  | "gpt-4o-mini"
+  // Tier 2
   | "deepseek-v4-pro"
   | "kimi-k2.6-non-thinking"
-  | "kimi-k2.6-thinking";
+  | "kimi-k2.6-thinking"
+  | "gemini-2.5-flash"
+  // Tier 3
+  | "gpt-4o"
+  | "gemini-2.5-pro"
+  | "claude-opus-4-7";
 
 // ---------------------------------------------------------------------------
 // .env loader — sets missing process.env keys from <PIPELINE_ROOT>/.env
@@ -81,7 +90,18 @@ interface ParsedArgs {
   subtable?: number;
   all: boolean;
   model: Model;
+  provider?: string;
+  apiKey?: string;
 }
+
+// env-var name for each provider
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  deepseek:  "DEEPSEEK_API_KEY",
+  kimi:      "KIMI_API_KEY",
+  google:    "GOOGLE_API_KEY",
+  openai:    "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+};
 
 function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = { all: false, model: "deepseek-v4-flash" };
@@ -104,6 +124,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--model":
         result.model = argv[++i] as Model;
+        break;
+      case "--provider":
+        result.provider = argv[++i];
+        break;
+      case "--api-key":
+        result.apiKey = argv[++i];
         break;
     }
   }
@@ -131,6 +157,16 @@ async function main(): Promise<void> {
     await loadDotEnv();
 
     const args = parseArgs(process.argv.slice(2));
+
+    // Inject API key from --api-key arg into process.env so provider modules
+    // can find it via their standard env-var lookup.  Only set if the env var
+    // is not already present (allows .env file to take precedence in dev).
+    if (args.apiKey && args.provider) {
+      const envVar = PROVIDER_ENV_VARS[args.provider];
+      if (envVar && !process.env[envVar]) {
+        process.env[envVar] = args.apiKey;
+      }
+    }
 
     if (!args.project) {
       writeLine("ERROR:0:Missing required --project argument");

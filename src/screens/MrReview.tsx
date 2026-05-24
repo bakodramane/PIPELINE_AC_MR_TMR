@@ -26,6 +26,8 @@ import {
   MR_SECTION_TITLES,
   MR_SECTIONS_TOTAL,
 } from "../types/ui";
+import { MODELS_BY_TIER, DEFAULT_MR_MODEL, getModelInfo } from "../providers/model-registry";
+import type { Model } from "../providers/types";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -499,6 +501,11 @@ const MrReview: FC<MrReviewProps> = ({
     total: number;
   } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<Model>(
+    () =>
+      (localStorage.getItem("agcensus_mr_model") as Model | null) ??
+      DEFAULT_MR_MODEL,
+  );
 
   // ── Load _claims.json ─────────────────────────────────────────────────────
 
@@ -676,7 +683,7 @@ const MrReview: FC<MrReviewProps> = ({
     try {
       const result = await invoke<string>("generate_mr_sections", {
         projectDir,
-        model: "deepseek-v4-flash",
+        model: selectedModel,
       });
       onToast(`Generation complete — ${result}.`, "success");
     } catch (err) {
@@ -755,6 +762,63 @@ const MrReview: FC<MrReviewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Model selector bar */}
+      <div className="bg-[#163d1c] border-b border-green-900/60 px-6 py-2">
+        <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-green-300 shrink-0">Model</span>
+            <select
+              value={selectedModel}
+              onChange={(e) => {
+                const m = e.target.value as Model;
+                setSelectedModel(m);
+                localStorage.setItem("agcensus_mr_model", m);
+              }}
+              disabled={generating}
+              className="text-xs text-white bg-transparent border border-green-700 rounded-lg px-2 py-1 focus:outline-none disabled:opacity-50 cursor-pointer"
+            >
+              {([1, 2, 3] as const).map((tier) => (
+                <optgroup
+                  key={tier}
+                  label={
+                    tier === 1
+                      ? "── Budget"
+                      : tier === 2
+                      ? "── Mid-range"
+                      : "── Premium"
+                  }
+                >
+                  {MODELS_BY_TIER[tier].map((m) => (
+                    <option
+                      key={m.model}
+                      value={m.model}
+                      className="text-gray-900 bg-white"
+                    >
+                      {m.displayName}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          {(() => {
+            const info = getModelInfo(selectedModel);
+            if (!info) return null;
+            // MR estimate: 15 sections × ~2 000 in + 400 out tokens
+            const estIn  = 15 * 2_000;
+            const estOut = 15 * 400;
+            const estCost =
+              (estIn * info.inputCostPerM + estOut * info.outputCostPerM) /
+              1_000_000;
+            return (
+              <span className="text-[10px] text-green-400 shrink-0">
+                Est. MR cost: ~${estCost.toFixed(3)} · 15 sections
+              </span>
+            );
+          })()}
+        </div>
+      </div>
 
       {/* Generation progress bar */}
       {generating && genProgress && (

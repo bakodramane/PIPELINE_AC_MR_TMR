@@ -837,5 +837,98 @@ New Tauri command `open_path(path: String)` in `lib.rs`:
 
 **TypeScript:** `npx tsc --noEmit` → zero errors.
 
-NEXT SESSION (18): PDF/document ingestion — drag-drop or file-pick PDFs into `sources/`,
+NEXT SESSION (18): Multi-provider support + Settings screen — see Session 18 notes below.
+
+---
+
+## Session 18 — Multi-provider support, model selector, settings screen
+
+**Goals accomplished:**
+1. Extended provider abstraction to 10 models across 5 providers (Goal 1)
+2. Settings screen with API key management and default model selection (Goal 2)
+3. Model selector dropdown on MR and TMR review screens (Goal 3)
+4. API keys from store passed via --api-key arg to generator sidecar (Goal 4)
+
+**Goal 1 — Provider abstraction (10 models, 5 providers):**
+
+`src/providers/types.ts`:
+- `Provider` extended: added `"google" | "openai" | "anthropic"`
+- `Model` extended: added Tier 1 (`gemini-2.0-flash`, `gpt-4o-mini`), Tier 2 (`gemini-2.5-flash`), Tier 3 (`gpt-4o`, `gemini-2.5-pro`, `claude-opus-4-7`)
+- New `ModelInfo` interface: model, provider, displayName, tier, tierLabel, inputCostPerM, outputCostPerM, contextWindow, supportsThinking, bestFor
+
+`src/providers/pricing.json`: Extended with 6 new models (gemini-2.0-flash $0.10/$0.40, gemini-2.5-flash $0.15/$0.60, gemini-2.5-pro $1.25/$10.00, gpt-4o-mini $0.15/$0.60, gpt-4o $2.50/$10.00, claude-opus-4-7 $3.00/$15.00)
+
+New provider modules:
+- `src/providers/google.ts` — Google Gemini via OpenAI-compatible endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`); env var `GOOGLE_API_KEY`
+- `src/providers/openai.ts` — standard OpenAI API (`https://api.openai.com/v1`); env var `OPENAI_API_KEY`
+- `src/providers/anthropic.ts` — `@anthropic-ai/sdk` (NOT OpenAI compat layer); streaming via `client.messages.stream()` + `.on("text")` + `.finalMessage()`; env var `ANTHROPIC_API_KEY`
+
+`src/providers/model-registry.ts` (NEW): Exports `MODEL_REGISTRY` (flat array of 10 `ModelInfo`), `MODELS_BY_TIER` (grouped by tier), `DEFAULT_MR_MODEL = "deepseek-v4-flash"`, `DEFAULT_TMR_MODEL = "deepseek-v4-flash"`, `getModelInfo(model)`.
+
+`src/providers/index.ts`: Updated `generate()` routing via `getProvider()` (prefix-based: deepseek-/kimi-/gemini-/gpt-/claude-). Added `testApiConnection(provider, apiKey)` export — makes a minimal test call to cheapest model per provider for Settings screen API key verification.
+
+**Goal 2 — Settings screen:**
+
+`src/screens/Settings.tsx` (NEW):
+- API Keys section: one row per provider (DeepSeek, Moonshot/Kimi, Google, OpenAI, Anthropic) with password input, show/hide toggle, Test button (`testApiConnection`), Save button (`invoke("save_api_key")`), status indicator (Saved ✓ / Not configured / Connection OK with latency / Error)
+- Default Models section: two `<select>` droppers (MR / TMR) grouped by tier; persisted to `localStorage`
+- Project Folder section: display current base dir + inline edit box
+- About section: version info
+
+New Rust commands in `src-tauri/src/lib.rs`:
+```rust
+fn save_api_key(app, provider: String, key: String) -> Result<(), String>
+fn get_api_key(app, provider: String) -> Result<Option<String>, String>
+```
+Both backed by `tauri-plugin-store` (`app.store("api_keys.json")`). Added `.plugin(tauri_plugin_store::Builder::new().build())` to Tauri builder.
+
+`src-tauri/Cargo.toml`: added `tauri-plugin-store = "2"`.
+
+`src/App.tsx`: Added `{ id: "settings" }` Screen variant. Fixed gear icon (`⚙`) in bottom-left corner visible on all non-settings screens; stores `prevScreen` to restore on Settings close.
+
+**Goal 3 — Model selector in review screens:**
+
+`src/screens/MrReview.tsx`:
+- Added `selectedModel` state (localStorage `"agcensus_mr_model"`, default `DEFAULT_MR_MODEL`)
+- Dark green model selector bar between header and progress bar: `<select>` with `<optgroup>` per tier; cost estimate (est. 30K in + 6K out tokens → ~$X.XXX for 15 sections)
+- `generate_mr_sections` now uses `selectedModel` instead of hardcoded `"deepseek-v4-flash"`
+
+`src/screens/TmrReview.tsx`: same pattern with `"agcensus_tmr_model"` and TMR cost estimate (23 × 1500 in + 600 out tokens).
+
+**Goal 4 — API key injection to generator sidecar:**
+
+`src-tauri/src/lib.rs` (`generate_mr_sections`, `generate_tmr_subtable`):
+- Calls `provider_for_model(&model)` (prefix-based lookup)
+- Calls `read_api_key_from_store(&app, provider)` — reads from tauri-plugin-store
+- Passes `--provider <name>` always; `--api-key <key>` only when a key is found in store
+- Falls back to env vars / .env file if no key in store (existing behaviour)
+
+`src-tauri/scripts/generate.ts`:
+- `ParsedArgs` extended: `provider?: string`, `apiKey?: string`
+- `parseArgs` handles `--provider` and `--api-key` flags
+- After `loadDotEnv()`: if `args.apiKey && args.provider`, sets the env var (`DEEPSEEK_API_KEY` etc.) only if not already present — env var in .env file takes precedence in dev
+
+**npm:**
+- `@anthropic-ai/sdk` added (`npm install @anthropic-ai/sdk --save`)
+
+**TypeScript:** `npx tsc --noEmit` → zero errors.
+
+**Files changed this session:**
+- `package.json` / `package-lock.json` — added `@anthropic-ai/sdk`
+- `src-tauri/Cargo.toml` — added `tauri-plugin-store = "2"`
+- `src-tauri/src/lib.rs` — added `save_api_key`, `get_api_key`, `provider_for_model`, `read_api_key_from_store`; updated `generate_mr_sections` and `generate_tmr_subtable` to pass `--provider`/`--api-key`; registered store plugin
+- `src-tauri/scripts/generate.ts` — extended `ParsedArgs`, `parseArgs`, `PROVIDER_ENV_VARS`, API key injection in `main()`; extended `Model` type to 10 models
+- `src/providers/types.ts` — extended `Model` (10 models), `Provider` (5 providers); added `ModelInfo`
+- `src/providers/pricing.json` — added 6 new model entries
+- `src/providers/google.ts` — NEW
+- `src/providers/openai.ts` — NEW
+- `src/providers/anthropic.ts` — NEW
+- `src/providers/model-registry.ts` — NEW
+- `src/providers/index.ts` — routing + `testApiConnection` export
+- `src/screens/Settings.tsx` — NEW
+- `src/screens/MrReview.tsx` — model selector + imports
+- `src/screens/TmrReview.tsx` — model selector + imports
+- `src/App.tsx` — settings screen + gear icon overlay
+
+NEXT SESSION (19): PDF/document ingestion — drag-drop or file-pick PDFs into `sources/`,
 index pages into `evidence/pages/` so generators can retrieve evidence for new country projects.
