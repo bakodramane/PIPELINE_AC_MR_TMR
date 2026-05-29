@@ -72,20 +72,37 @@ function scoreFromText(text: string, normalizedKeywords: string[]): number {
 // ---------------------------------------------------------------------------
 
 /**
+ * Count digit sequences (runs of consecutive digits) in a string.
+ * Used by the TMR numerical-density fallback so that data-dense pages
+ * (census tables, even in non-Latin scripts) rank higher regardless of
+ * whether their surrounding text matches English keywords.
+ */
+function numericDensity(text: string): number {
+  const matches = text.match(/\d+/g);
+  return matches ? matches.length : 0;
+}
+
+/**
  * Retrieve the most relevant pages from a project's evidence store.
  *
  * @param projectDir  Absolute path to the country project directory.
  * @param keywords    Query terms (case-insensitive substring matching).
  * @param maxPages    Maximum number of pages to return (default 20).
+ * @param mode        'mr' (default) scores on keywords only.  'tmr' additionally
+ *                    adds a numerical-density score (digit-sequence count × 0.1)
+ *                    so number-heavy pages rank higher even when keyword match
+ *                    fails (e.g. non-English census tables).
  *
  * @returns Sorted array of PageJson objects, most relevant first.
- *          Returns an empty array (never throws) if the index is missing or
- *          no pages match.
+ *          Never throws.  If the index is missing, returns [].  If pages exist
+ *          but none match the query, returns the first `maxPages` pages sorted
+ *          by page number, each flagged with `fallback: true`.
  */
 export async function retrieveEvidence(
   projectDir: string,
   keywords: string[],
   maxPages = 20,
+  mode: "mr" | "tmr" = "mr",
 ): Promise<PageJson[]> {
   // ── 1. Load evidence index ──────────────────────────────────────────────
   const indexPath = path.join(projectDir, "evidence", "_evidence.json");
@@ -133,10 +150,37 @@ export async function retrieveEvidence(
     if (page.text.length < 100) continue;
 
     const textScore = scoreFromText(page.text, normalizedKeywords);
-    result.push({ page, score: indexScore + textScore });
+    // TMR mode: add numerical density so number-heavy pages surface even when
+    // their text does not match English keywords (non-Latin census tables).
+    const densityScore =
+      mode === "tmr" ? numericDensity(page.text) * 0.1 : 0;
+    result.push({ page, score: indexScore + textScore + densityScore });
   }
 
-  // ── 4. Sort by combined score and return top maxPages ───────────────────
+  // ── 4. Sort by combined score ────────────────────────────────────────────
   result.sort((a, b) => b.score - a.score);
+
+  // ── 5. Empty-evidence fallback ──────────────────────────────────────────
+  // If nothing matched (or every candidate was filtered out), do NOT return
+  // empty.  Return the first maxPages pages by page number, flagged so the
+  // generator can record that fallback evidence was used.
+  if (result.length === 0) {
+    const fallbackSummaries = [...index.pages]
+      .sort((a, b) => a.page_number - b.page_number)
+      .slice(0, maxPages);
+
+    const fallbackPages: PageJson[] = [];
+    for (const summary of fallbackSummaries) {
+      const pagePath = path.join(pagesDir, `${summary.page_id}.json`);
+      try {
+        const page = await readJson<PageJson>(pagePath);
+        fallbackPages.push({ ...page, fallback: true });
+      } catch {
+        continue; // page file missing — skip
+      }
+    }
+    return fallbackPages;
+  }
+
   return result.slice(0, maxPages).map((r) => r.page);
 }

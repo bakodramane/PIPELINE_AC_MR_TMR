@@ -387,7 +387,7 @@ export async function generateSection(
   // ── 2. Retrieve evidence ─────────────────────────────────────────────────
   const keywords = SECTION_KEYWORDS[sectionNumber] ?? [];
   const maxPages = SECTION_MAX_PAGES[sectionNumber] ?? 20;
-  const pages = await retrieveEvidence(projectDir, keywords, maxPages);
+  const pages = await retrieveEvidence(projectDir, keywords, maxPages, "mr");
 
   const evidenceBlock = formatEvidenceBlock(pages);
   const userPrompt = buildUserPrompt(

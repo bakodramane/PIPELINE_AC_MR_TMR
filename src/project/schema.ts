@@ -99,6 +99,17 @@ export interface PageJson {
   tables_on_page: string[];
   /** BCP 47 language tag */
   language: string;
+  /**
+   * 0–1 extraction confidence. Set by structured ingesters (e.g. Excel → 0.95).
+   * Absent for plain PDF text pages (treated as high confidence by default).
+   */
+  extraction_confidence?: number;
+  /**
+   * Set to true by retrieveEvidence when this page was returned as a
+   * keyword-independent fallback (no pages matched the query). Lets the
+   * generator note in the audit log that fallback evidence was used.
+   */
+  fallback?: boolean;
 }
 
 // ---------------------------------------------------------------------------

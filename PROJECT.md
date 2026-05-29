@@ -1022,3 +1022,82 @@ paths by default — the OS drop is captured by the window. Use the
 NEXT SESSION (20): Issues queue screen (the last placeholder NavTab), and wire
 `source_added`/`evidence_indexed` audit events through to the Audit log viewer so
 newly-ingested sources show up in the chronological log.
+
+---
+
+## Session 20 — Pilot fixes: Excel ingest, multi-file, non-English TMR, MD export
+
+Four pilot-reported issues fixed.
+
+**Fix 1 — Excel ingestion:**
+- NEW `src/ingest/excel.ts` — `parseExcel(filePath, sourceDocId, language)` using
+  SheetJS (`xlsx`). One TableJson + one PageJson per sheet.
+  - table_id / page_id: `<docId>-sheet-<1-based-index>-<slug(sheetName)>`
+  - page_number = sheet index (1-based); title = sheet name; columns = first
+    non-empty row; rows = remaining rows `{label, values:(string|number)[]}`
+    (cast `as unknown as TableRow` since schema TableRow.values is `(number|null)[]`);
+    units = {}; extraction_confidence = 0.95.
+  - PageJson.text = sheet name + all cell values joined; headings = [sheetName];
+    tables_on_page = [tableId]; extraction_confidence = 0.95.
+- `src/ingest/pipeline.ts` — NEW exported `ingestExcel(...)` mirroring ingestPdf's
+  persistence (writePage/writeTable/evidence-index merge/audit). `ingestPdf` unchanged.
+- `src-tauri/scripts/ingest.mjs` — detects ext: `.xlsx`/`.xls` → ingestExcel,
+  else ingestPdf. DONE count is sheet count for Excel (= page count, since one
+  PageJson per sheet). NOTE: this file has mojibake em-dashes (`â€”`) from an
+  external edit — avoid matching comment lines containing them when editing.
+- VERIFIED end-to-end: ran ingest.mjs on `references/nepal-2021/sources/NPL_RES_ENG_2022.xlsx`
+  → `DONE:117`, 117 table + 117 page files, _index.json upserted with page_count
+  + sha256, table JSON well-formed (page_number=sheet index, conf 0.95, units {}).
+
+**Fix 2 — Multiple file selection (`src/screens/ProjectOverview.tsx`):**
+- `open({ multiple: true, filters:[{name:'Census documents', extensions:['pdf','xlsx','xls']}] })`.
+- Drag-drop (`tauri://drag-drop`) now collects ALL accepted-extension paths.
+- SourcesTab reworked from single `pending` file to a `queue: QueuedFile[]` +
+  `queueIndex`. The Document-ID/language form is shown one file at a time
+  ("File X of N: name — confirm ID and language, then continue"). Each click of
+  "Add and continue" / "Add and index" ingests that file, then advances; per-file
+  errors are toasted but do NOT abort the batch. `batchResults` ref tallies ok/fail
+  across the batch (survives re-renders). End-of-batch summary toast:
+  single → "Indexed successfully · N pages"; multi all-ok → "Indexed N documents
+  successfully"; multi with failures → "Indexed X of N — Y failed (see details)".
+- Auto-ID prefix uses `postCount` (fresh sources length after each ingest) so
+  batched files get sequential NN- prefixes without collision.
+- Module consts `ACCEPTED_EXTENSIONS` / `hasAcceptedExtension` / `QueuedFile`.
+
+**Fix 3 — Non-English TMR retrieval (`src/generators/evidence.ts`):**
+- `retrieveEvidence(projectDir, keywords, maxPages=20, mode:'mr'|'tmr'='mr')`.
+- mode 'tmr': adds numeric-density score = `(text.match(/\d+/g)||[]).length * 0.1`
+  to each page's combined score → number-heavy pages (census tables, any script)
+  rank higher regardless of English keyword match.
+- Empty-result fallback: if `result.length === 0` after scoring/filtering, return
+  the first maxPages index pages sorted by page_number, each spread with
+  `fallback: true` (no length filter applied, so it never returns empty when pages exist).
+- `PageJson` gained optional `extraction_confidence?: number` and `fallback?: boolean`
+  (schema.ts). Both optional → no breakage to PDF pages (confidence undefined).
+- `tmr.ts`: passes `mode:'tmr'`; computes `nonEnglishHint = pages.some(p =>
+  (p.extraction_confidence ?? 1) < 0.8 || p.fallback === true)`; when true,
+  buildUserPrompt appends the non-English positional-reading instruction.
+- `mr.ts`: passes `mode:'mr'` explicitly.
+- VERIFIED: against the 117-page Nepal Excel project, garbage keywords in TMR mode
+  still surface the 5 most number-dense pages (density working); a 2-short-page
+  project with no keyword match returns both pages flagged `fallback:true` sorted
+  by page number (Change 2 + flag working).
+
+**Fix 4 — MD export (`src/generators/export-mr.ts`):**
+- INVESTIGATED: the described bug (writeFile inside the section loop) was NOT
+  present — the file already builds the whole document in memory (single `writeFile`
+  at the end) and iterates `for n in 1..15` explicitly with the WCA "not available"
+  boilerplate for empty sections. No code change needed.
+- VERIFIED: ran export.mjs on a scratch project with only §1 and §5 populated →
+  output .md has all 15 `### N.` headings in order, 2 populated, 13 placeholders.
+
+**Verification:** `npx tsc --noEmit` → zero errors. No Rust changes this session.
+Live GUI tests (add Excel via Sources tab, 2-PDF multi-select, Pakistan MR export,
+Mongolia TMR) NOT run here: this machine has no AgCensus projects (Pakistan/Mongolia
+were on the pilot machine) and no AgCensus data dir yet. All four fixes validated via
+direct pipeline/script execution (ingest.mjs, export.mjs) + retrieveEvidence runtime
+tests + Vite transform of ProjectOverview.tsx instead.
+
+NOTE for live Mongolia test: the numeric-density change (Fix 3 Change 1) is what
+should make number-bearing sub-tables populate even with Cyrillic surrounding text;
+the empty-fallback (Change 2) only triggers when zero pages pass the ≥100-char filter.

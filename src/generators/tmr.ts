@@ -600,6 +600,7 @@ function buildUserPrompt(
   cellsToPopulate: string[],
   singleRow?: string,
   isHouseholdSector?: boolean,
+  nonEnglishHint?: boolean,
 ): string {
   // Build cell key → (row, col) description, filtered to cellsToPopulate
   const cellDescriptions: string[] = [];
@@ -625,7 +626,11 @@ function buildUserPrompt(
     ? `\n\nUniverse note: This sub-table covers the **household sector only**. Only include holdings operated by civil persons or groups of civil persons (i.e. individual farm households).`
     : "";
 
-  return `## Sub-Table Specification${singleRowBanner}
+  const nonEnglishNote = nonEnglishHint
+    ? `\n\nThe source document may be in a non-English language. Look for numeric values in the evidence pages that correspond to the row labels by their position in tables, not by matching English keywords. Return the numeric values you find even if the surrounding text is not in English.`
+    : "";
+
+  return `## Sub-Table Specification${singleRowBanner}${nonEnglishNote}
 
 Sub-Table ${subTableNumber}: ${spec.title}
 Universe: ${spec.universe}${householdSectorNote}
@@ -795,9 +800,18 @@ export async function generateSubTable(
 
   // ── 2. Retrieve evidence (shared across all row calls) ────────────────────
   const keywords = SUBTABLE_KEYWORDS[subTableNumber] ?? [];
-  // 15 pages — some censuses spread a topic across multiple pages
-  const pages = await retrieveEvidence(projectDir, keywords, 15);
+  // 15 pages — some censuses spread a topic across multiple pages.
+  // mode 'tmr' adds numerical-density scoring so number-heavy pages surface
+  // even when keyword match fails (non-English census tables).
+  const pages = await retrieveEvidence(projectDir, keywords, 15, "tmr");
   const evidenceTables = await retrieveEvidenceTables(projectDir, keywords);
+
+  // Non-English / low-confidence detection: if any retrieved page is low
+  // extraction confidence (< 0.8) or was returned as keyword-independent
+  // fallback evidence, instruct the model to read numbers positionally.
+  const nonEnglishHint = pages.some(
+    (p) => (p.extraction_confidence ?? 1) < 0.8 || p.fallback === true,
+  );
 
   // ── 3. Determine generation strategy ─────────────────────────────────────
   const isMultiRow = MULTI_ROW_SUBTABLES.has(subTableNumber);
@@ -834,6 +848,7 @@ export async function generateSubTable(
       cellsForThisCall,
       singleRow ?? undefined,
       isHouseholdSector,
+      nonEnglishHint,
     );
 
     const wallStart = Date.now();

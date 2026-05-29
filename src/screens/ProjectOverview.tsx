@@ -216,6 +216,21 @@ interface IngestProgressPayload {
   message?: string;
 }
 
+/** Source document types accepted by the ingest pipeline. */
+const ACCEPTED_EXTENSIONS = ["pdf", "xlsx", "xls"];
+
+/** True when a filename ends with one of the accepted source extensions. */
+function hasAcceptedExtension(name: string): boolean {
+  const lower = name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some((ext) => lower.endsWith(`.${ext}`));
+}
+
+/** A file queued for ingestion. */
+interface QueuedFile {
+  path: string;
+  name: string;
+}
+
 // ---------------------------------------------------------------------------
 // Source row
 // ---------------------------------------------------------------------------
@@ -265,9 +280,10 @@ function SourcesTab({
   const [sources, setSources] = useState<SourceIndexEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [pending, setPending] = useState<{ path: string; name: string } | null>(
-    null,
-  );
+  // Queue of files awaiting confirmation + ingestion. The user confirms the
+  // Document ID + language for each file in sequence (one form at a time).
+  const [queue, setQueue] = useState<QueuedFile[]>([]);
+  const [queueIndex, setQueueIndex] = useState(0);
   const [docId, setDocId] = useState("");
   const [language, setLanguage] = useState<Language>("en");
   const [indexing, setIndexing] = useState(false);
@@ -279,6 +295,13 @@ function SourcesTab({
   useEffect(() => {
     sourcesLengthRef.current = sources.length;
   }, [sources.length]);
+
+  // Running tally across a multi-file batch (survives per-file re-renders).
+  const batchResults = useRef<{ ok: number; fail: number; lastPages: number }>({
+    ok: 0,
+    fail: 0,
+    lastPages: 0,
+  });
 
   // ── Load _index.json ──────────────────────────────────────────────────────
 
@@ -302,37 +325,53 @@ function SourcesTab({
     void loadSources();
   }, [loadSources]);
 
-  // ── File selection helper ─────────────────────────────────────────────────
+  // ── Pre-fill the Document ID + language for one file ───────────────────────
 
-  const handleFileSelected = useCallback(
-    (filePath: string, fileName: string) => {
-      const ext = fileName.lastIndexOf(".");
-      const stem = ext > 0 ? fileName.slice(0, ext) : fileName;
+  const prefillForFile = useCallback(
+    (fileName: string, baseCount?: number) => {
+      const dot = fileName.lastIndexOf(".");
+      const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
       const sanitized = stem
         .replace(/[^a-z0-9-]/gi, "-")
         .replace(/-+/g, "-")
         .toLowerCase();
-      const prefix = String(sourcesLengthRef.current + 1).padStart(2, "0");
+      const base = baseCount ?? sourcesLengthRef.current;
+      const prefix = String(base + 1).padStart(2, "0");
       setDocId(`${prefix}-${sanitized}`);
-      setPending({ path: filePath, name: fileName });
       setLanguage("en");
       setConfirmReplace(false);
     },
     [],
   );
 
-  // ── Listen for Tauri window-level drag-drop events ─────────────────────────
+  // ── Enqueue selected/dropped files (filters to accepted extensions) ────────
+
+  const enqueueFiles = useCallback(
+    (files: QueuedFile[]) => {
+      const accepted = files.filter((f) => hasAcceptedExtension(f.name));
+      if (accepted.length === 0) return;
+      batchResults.current = { ok: 0, fail: 0, lastPages: 0 };
+      setQueue(accepted);
+      setQueueIndex(0);
+      prefillForFile(accepted[0].name);
+    },
+    [prefillForFile],
+  );
+
+  // ── Listen for Tauri window-level drag-drop events (multiple files) ────────
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
     listen<{ paths?: string[] }>("tauri://drag-drop", (event) => {
       setIsDragOver(false);
-      const paths = event.payload.paths ?? [];
-      const pdfPath = paths.find((p) => p.toLowerCase().endsWith(".pdf"));
-      if (pdfPath) {
-        const name = pdfPath.split(/[/\\]/).pop() ?? pdfPath;
-        handleFileSelected(pdfPath, name);
+      const paths = (event.payload.paths ?? []).filter((p) =>
+        hasAcceptedExtension(p),
+      );
+      if (paths.length > 0) {
+        enqueueFiles(
+          paths.map((p) => ({ path: p, name: p.split(/[/\\]/).pop() ?? p })),
+        );
       }
     })
       .then((fn) => {
@@ -343,36 +382,57 @@ function SourcesTab({
     return () => {
       unlisten?.();
     };
-  }, [handleFileSelected]);
+  }, [enqueueFiles]);
 
-  // ── Native file picker ────────────────────────────────────────────────────
+  // ── Native file picker (multiple selection) ────────────────────────────────
 
   async function handleBrowseClick() {
-    if (indexing) return;
+    if (indexing || queue.length > 0) return;
     const selected = await open({
-      multiple: false,
-      filters: [{ name: "PDF files", extensions: ["pdf"] }],
+      multiple: true,
+      filters: [
+        { name: "Census documents", extensions: ["pdf", "xlsx", "xls"] },
+      ],
     });
-    if (selected && typeof selected === "string") {
-      const name = selected.split(/[/\\]/).pop() ?? selected;
-      handleFileSelected(selected, name);
-    }
+    if (!selected) return;
+    const arr = Array.isArray(selected) ? selected : [selected];
+    enqueueFiles(
+      arr.map((p) => ({ path: p, name: p.split(/[/\\]/).pop() ?? p })),
+    );
   }
 
-  // ── Add and index ─────────────────────────────────────────────────────────
+  // ── Cancel the whole batch ─────────────────────────────────────────────────
 
-  async function handleAddAndIndex() {
-    if (!pending || indexing) return;
+  function cancelBatch() {
+    setQueue([]);
+    setQueueIndex(0);
+    setDocId("");
+    setLanguage("en");
+    setConfirmReplace(false);
+  }
+
+  // ── Confirm + ingest the current file, then advance to the next ────────────
+
+  async function handleAddCurrent() {
+    const current = queue[queueIndex];
+    if (!current || indexing) return;
 
     // First click on a duplicate ID shows the confirmation prompt
     if (sources.some((s) => s.id === docId) && !confirmReplace) {
       setConfirmReplace(true);
       return;
     }
-
     setConfirmReplace(false);
+
+    const total = queue.length;
+    const multi = total > 1;
+    const thisDocId = docId;
+    const thisLang = language;
+
     setIndexing(true);
-    setIndexProgress("Copying file…");
+    setIndexProgress(
+      multi ? `Copying ${current.name}…` : "Copying file…",
+    );
 
     let pageCountFromEvent: number | null = null;
     let errorFromEvent: string | null = null;
@@ -380,7 +440,7 @@ function SourcesTab({
     const unlisten = await listen<IngestProgressPayload>(
       "ingest-progress",
       (event) => {
-        if (event.payload.doc_id !== docId) return;
+        if (event.payload.doc_id !== thisDocId) return;
         if (event.payload.status === "done") {
           pageCountFromEvent = event.payload.page_count ?? null;
         } else if (event.payload.status === "error") {
@@ -389,50 +449,87 @@ function SourcesTab({
       },
     );
 
+    let succeeded = false;
+    let postCount = sourcesLengthRef.current;
+
     try {
       // Step 1 — copy file into sources/
       const destPath = await invoke<string>("copy_source_file", {
-        srcPath: pending.path,
+        srcPath: current.path,
         projectDir,
-        docId,
-        filename: pending.name,
+        docId: thisDocId,
+        filename: current.name,
       });
 
       setIndexProgress(
-        "Indexing pages… this may take 30–60 seconds for a large PDF",
+        multi
+          ? `Indexing file ${queueIndex + 1} of ${total}: ${current.name}…`
+          : "Indexing pages… this may take 30–60 seconds for a large document",
       );
 
       // Step 2 — run ingest pipeline (emits ingest-progress events)
       await invoke("ingest_source", {
         projectDir,
-        docId,
+        docId: thisDocId,
         filePath: destPath,
-        language,
+        language: thisLang,
       });
 
       if (errorFromEvent) {
         throw new Error(errorFromEvent);
       }
 
-      // Reload source list (also retrieves freshly-written page_count)
+      succeeded = true;
       const fresh = await loadSources();
-      const entry = fresh.find((s) => s.id === docId);
-      const pc = entry?.page_count ?? pageCountFromEvent ?? 0;
-
-      onToast(`Indexed successfully · ${pc} pages`, "success");
-      setPending(null);
-      setDocId("");
-      setLanguage("en");
+      postCount = fresh.length;
+      const entry = fresh.find((s) => s.id === thisDocId);
+      batchResults.current.lastPages =
+        entry?.page_count ?? pageCountFromEvent ?? 0;
     } catch (err) {
-      onToast(`Failed: ${String(err)}`, "error");
+      // Per-file error: surface it but keep processing the rest of the batch.
+      onToast(`${current.name} failed: ${String(err)}`, "error");
     } finally {
       unlisten();
+    }
+
+    if (succeeded) batchResults.current.ok += 1;
+    else batchResults.current.fail += 1;
+
+    // Advance to the next file, or finish the batch.
+    const isLast = queueIndex + 1 >= total;
+    if (!isLast) {
+      const nextIndex = queueIndex + 1;
+      setQueueIndex(nextIndex);
+      prefillForFile(queue[nextIndex].name, postCount);
+      setIndexing(false);
+      setIndexProgress(null);
+    } else {
+      const { ok, fail, lastPages } = batchResults.current;
+      const done = ok + fail;
+      if (done <= 1) {
+        if (ok === 1) {
+          onToast(`Indexed successfully · ${lastPages} pages`, "success");
+        }
+        // single-file failure was already toasted above
+      } else if (fail === 0) {
+        onToast(`Indexed ${ok} documents successfully`, "success");
+      } else {
+        onToast(
+          `Indexed ${ok} of ${done} — ${fail} failed (see details)`,
+          "warning",
+        );
+      }
+      cancelBatch();
       setIndexing(false);
       setIndexProgress(null);
     }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  const current =
+    queue.length > 0 && queueIndex < queue.length ? queue[queueIndex] : null;
+  const isLastInQueue = queueIndex + 1 >= queue.length;
 
   return (
     <div className="px-6 py-5 space-y-4">
@@ -458,7 +555,7 @@ function SourcesTab({
       )}
 
       {/* Drop zone — hidden while showing the form or while indexing */}
-      {!pending && !indexing && (
+      {!current && !indexing && (
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -478,18 +575,26 @@ function SourcesTab({
         >
           <div className="text-3xl mb-2">📄</div>
           <div className="text-sm font-medium text-gray-700">
-            Drop census PDF here or click to browse
+            Drop census documents here or click to browse
           </div>
-          <div className="text-xs text-gray-400 mt-1">PDF files only</div>
+          <div className="text-xs text-gray-400 mt-1">
+            PDF, XLSX, or XLS files · multiple allowed
+          </div>
         </div>
       )}
 
-      {/* Inline form — shown when a file is selected and not yet indexing */}
-      {pending && !indexing && (
+      {/* Inline form — shown when a file is awaiting confirmation, not indexing */}
+      {current && !indexing && (
         <div className="border border-[#1B4F23]/40 rounded-xl p-4 bg-green-50/60 space-y-3">
+          {queue.length > 1 && (
+            <div className="text-xs text-[#1B4F23] font-medium">
+              File {queueIndex + 1} of {queue.length}: {current.name} — confirm
+              ID and language, then continue
+            </div>
+          )}
           <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
             <span>📄</span>
-            <span className="truncate">{pending.name}</span>
+            <span className="truncate">{current.name}</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -531,18 +636,15 @@ function SourcesTab({
 
           <div className="flex gap-2">
             <button
-              onClick={() => void handleAddAndIndex()}
+              onClick={() => void handleAddCurrent()}
               className="text-xs font-medium text-white bg-[#1B4F23] rounded-lg px-4 py-2 hover:bg-[#163d1c] transition-colors"
             >
-              Add and index
+              {queue.length > 1 && !isLastInQueue
+                ? "Add and continue"
+                : "Add and index"}
             </button>
             <button
-              onClick={() => {
-                setPending(null);
-                setDocId("");
-                setLanguage("en");
-                setConfirmReplace(false);
-              }}
+              onClick={cancelBatch}
               className="text-xs text-gray-500 border border-gray-200 rounded-lg px-3 py-2 hover:border-gray-300 hover:text-gray-700 transition-colors"
             >
               Cancel

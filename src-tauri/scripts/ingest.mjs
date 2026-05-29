@@ -71,16 +71,26 @@ async function main() {
 
     // Dynamic import via tsx module loader â€” resolves .ts extensions
     let ingestPdf;
+    let ingestExcel;
     try {
       const mod = await import(pathToFileURL(path.join(PIPELINE_ROOT, "src/ingest/pipeline.ts")).href);
       ingestPdf = mod.ingestPdf;
+      ingestExcel = mod.ingestExcel;
     } catch (err) {
       writeLine(`ERROR:Cannot load ingest pipeline: ${sanitise(String(err))}`);
       return;
     }
 
-    // Run the evidence indexing pipeline
-    await ingestPdf(args.project, args.docId, args.file, args.language);
+    // Detect file type by extension and run the matching ingester.
+    // Excel (.xlsx / .xls) is indexed one TableJson + PageJson per sheet;
+    // PDF is indexed one PageJson per page. The DONE count below reflects
+    // sheets for Excel and pages for PDF (both counted from the evidence index).
+    const ext = path.extname(args.file).toLowerCase();
+    if (ext === ".xlsx" || ext === ".xls") {
+      await ingestExcel(args.project, args.docId, args.file, args.language);
+    } else {
+      await ingestPdf(args.project, args.docId, args.file, args.language);
+    }
 
     // Count pages indexed for this document by reading the evidence index
     const evidenceRaw = await readFile(

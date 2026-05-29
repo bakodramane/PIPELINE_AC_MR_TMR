@@ -32,6 +32,7 @@ import type {
 } from "../project/schema";
 import { parsePdf } from "./pdf";
 import { extractTables } from "./tables";
+import { parseExcel } from "./excel";
 
 // ---------------------------------------------------------------------------
 // Keyword extraction (simple: lowercase unique meaningful tokens)
@@ -147,6 +148,88 @@ export async function ingestPdf(
   await writeEvidence(projectDir, evidenceIndex);
 
   // 7. Append audit event
+  const event: EvidenceIndexedEvent = {
+    type: "evidence_indexed",
+    timestamp: new Date().toISOString(),
+    source_id: sourceDocId,
+    pages_indexed: pages.length,
+    tables_indexed: tables.length,
+  };
+  await appendAuditEvent(projectDir, event);
+}
+
+/**
+ * Ingest one Excel workbook (.xlsx / .xls) into a project directory.
+ *
+ * Mirrors ingestPdf but uses the structured Excel parser: each sheet becomes
+ * one TableJson and one PageJson. Writes them to the evidence store with the
+ * same IO helpers, merges into evidence/_evidence.json, and appends an
+ * evidence_indexed audit event.
+ *
+ * @param projectDir   Absolute path to the project directory.
+ * @param sourceDocId  The source document id (e.g. "02-tables").
+ * @param filePath     Absolute or relative path to the .xlsx / .xls file.
+ * @param language     BCP-47 language tag (default "en").
+ */
+export async function ingestExcel(
+  projectDir: string,
+  sourceDocId: string,
+  filePath: string,
+  language = "en",
+): Promise<void> {
+  // 1. Parse workbook → pages (one per sheet) + tables (one per sheet)
+  const { pages, tables } = await parseExcel(filePath, sourceDocId, language);
+
+  // 2. Write individual page files
+  for (const page of pages) {
+    await writePage(projectDir, page);
+  }
+
+  // 3. Write individual table files
+  for (const table of tables) {
+    await writeTable(projectDir, table);
+  }
+
+  // 4. Merge into the evidence index (dedupe on id for safe re-ingest)
+  const evidenceIndex = await readEvidence(projectDir);
+  const existingPageIds = new Set(evidenceIndex.pages.map((p) => p.page_id));
+  const existingTableIds = new Set(evidenceIndex.tables.map((t) => t.table_id));
+
+  for (const page of pages) {
+    if (!existingPageIds.has(page.page_id)) {
+      const summary: EvidencePageSummary = {
+        page_id: page.page_id,
+        source_doc: page.source_doc,
+        page_number: page.page_number,
+        headings: page.headings,
+        keywords: extractKeywords(page.text),
+      };
+      evidenceIndex.pages.push(summary);
+    }
+  }
+
+  for (const table of tables) {
+    if (!existingTableIds.has(table.table_id)) {
+      const allText = [
+        table.title,
+        ...table.columns,
+        ...table.rows.map((r) => r.label),
+      ].join(" ");
+      const summary: EvidenceTableSummary = {
+        table_id: table.table_id,
+        source_doc: table.source_doc,
+        page_number: table.page_number,
+        title: table.title,
+        keywords: extractKeywords(allText),
+      };
+      evidenceIndex.tables.push(summary);
+    }
+  }
+
+  evidenceIndex.last_updated = new Date().toISOString();
+  await writeEvidence(projectDir, evidenceIndex);
+
+  // 5. Append audit event
   const event: EvidenceIndexedEvent = {
     type: "evidence_indexed",
     timestamp: new Date().toISOString(),
