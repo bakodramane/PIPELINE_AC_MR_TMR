@@ -6,16 +6,24 @@
  *   - Two generator cards side-by-side (MR draft, TMR draft)
  *   - Navigation tab row (MR draft, TMR draft, Sources, Issues, Audit log)
  *
- * This is the hub screen between the project list (Screen 1) and the
- * detail review screens (MR / TMR).
- *
- * Session 14: "Generate all" buttons now call real Tauri commands with
- * spinner feedback while generation runs.
+ * Session 19: Sources tab is now a real UI — lists indexed sources, provides
+ * a drag-and-drop zone + native file picker (Tauri dialog plugin), and drives
+ * the copy_source_file + ingest_source Tauri commands.
  */
 
-import { useState, type FC } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  type FC,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import type { ProjectInfo, ToastMessage } from "../types/ui";
+import type { SourceIndexEntry } from "../project/schema";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -31,6 +39,14 @@ interface ProjectOverviewProps {
 }
 
 // ---------------------------------------------------------------------------
+// Path helper (same as in other screens)
+// ---------------------------------------------------------------------------
+
+function joinPath(...parts: string[]): string {
+  return parts.map((p) => p.replace(/[/\\]+$/, "")).join("/");
+}
+
+// ---------------------------------------------------------------------------
 // Metric card
 // ---------------------------------------------------------------------------
 
@@ -43,7 +59,7 @@ function MetricCard({
   label: string;
   value: string | number;
   sub?: string;
-  progress?: number; // 0–1, shows a thin bar if provided
+  progress?: number;
 }) {
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4">
@@ -95,13 +111,11 @@ function GeneratorCard({
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-5 flex flex-col gap-4">
-      {/* Header */}
       <div>
         <div className="text-sm font-semibold text-gray-900">{title}</div>
         <div className="text-[10px] text-gray-400 mt-0.5">{subtitle}</div>
       </div>
 
-      {/* Status summary */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-gray-500">{okLabel}</span>
@@ -123,7 +137,6 @@ function GeneratorCard({
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex gap-2 mt-auto">
         <button
           onClick={onOpen}
@@ -182,8 +195,378 @@ function NavTab({
 }
 
 // ---------------------------------------------------------------------------
+// Sources tab — types
+// ---------------------------------------------------------------------------
+
+type Language = "en" | "fr" | "es" | "ar" | "pt" | "other";
+
+const LANGUAGE_OPTIONS: { value: Language; label: string }[] = [
+  { value: "en", label: "English" },
+  { value: "fr", label: "French" },
+  { value: "es", label: "Spanish" },
+  { value: "ar", label: "Arabic" },
+  { value: "pt", label: "Portuguese" },
+  { value: "other", label: "Other" },
+];
+
+interface IngestProgressPayload {
+  doc_id: string;
+  status: "done" | "error";
+  page_count?: number;
+  message?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Source row
+// ---------------------------------------------------------------------------
+
+function SourceRow({ entry }: { entry: SourceIndexEntry }) {
+  const hasPages = (entry.page_count ?? 0) > 0;
+  return (
+    <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-3 py-2.5">
+      <span className="text-base shrink-0">📄</span>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-gray-800 truncate">
+          {entry.filename}
+        </div>
+        <div className="text-[11px] text-gray-400 font-mono">{entry.id}</div>
+      </div>
+      <div className="shrink-0 text-xs text-gray-500 tabular-nums">
+        {entry.page_count != null ? `${entry.page_count}p` : "—"}
+      </div>
+      <div className="shrink-0 text-xs text-gray-400 uppercase">
+        {entry.language}
+      </div>
+      <div className="shrink-0 text-xs text-gray-400">{entry.retrieved}</div>
+      <span
+        className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full border font-medium ${
+          hasPages
+            ? "bg-green-50 border-green-200 text-green-700"
+            : "bg-amber-50 border-amber-200 text-amber-700"
+        }`}
+      >
+        {hasPages ? "Indexed ✓" : "⚠ Low confidence"}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sources tab — main component
+// ---------------------------------------------------------------------------
+
+function SourcesTab({
+  projectDir,
+  onToast,
+}: {
+  projectDir: string;
+  onToast: (msg: string, type: ToastMessage["type"]) => void;
+}) {
+  const [sources, setSources] = useState<SourceIndexEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [pending, setPending] = useState<{ path: string; name: string } | null>(
+    null,
+  );
+  const [docId, setDocId] = useState("");
+  const [language, setLanguage] = useState<Language>("en");
+  const [indexing, setIndexing] = useState(false);
+  const [indexProgress, setIndexProgress] = useState<string | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+
+  // Ref so the drag-drop event listener always sees current sources count
+  const sourcesLengthRef = useRef(0);
+  useEffect(() => {
+    sourcesLengthRef.current = sources.length;
+  }, [sources.length]);
+
+  // ── Load _index.json ──────────────────────────────────────────────────────
+
+  const loadSources = useCallback(async (): Promise<SourceIndexEntry[]> => {
+    try {
+      const raw = await readTextFile(
+        joinPath(projectDir, "sources", "_index.json"),
+      );
+      const list = JSON.parse(raw) as SourceIndexEntry[];
+      setSources(list);
+      setLoading(false);
+      return list;
+    } catch {
+      setSources([]);
+      setLoading(false);
+      return [];
+    }
+  }, [projectDir]);
+
+  useEffect(() => {
+    void loadSources();
+  }, [loadSources]);
+
+  // ── File selection helper ─────────────────────────────────────────────────
+
+  const handleFileSelected = useCallback(
+    (filePath: string, fileName: string) => {
+      const ext = fileName.lastIndexOf(".");
+      const stem = ext > 0 ? fileName.slice(0, ext) : fileName;
+      const sanitized = stem
+        .replace(/[^a-z0-9-]/gi, "-")
+        .replace(/-+/g, "-")
+        .toLowerCase();
+      const prefix = String(sourcesLengthRef.current + 1).padStart(2, "0");
+      setDocId(`${prefix}-${sanitized}`);
+      setPending({ path: filePath, name: fileName });
+      setLanguage("en");
+      setConfirmReplace(false);
+    },
+    [],
+  );
+
+  // ── Listen for Tauri window-level drag-drop events ─────────────────────────
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    listen<{ paths?: string[] }>("tauri://drag-drop", (event) => {
+      setIsDragOver(false);
+      const paths = event.payload.paths ?? [];
+      const pdfPath = paths.find((p) => p.toLowerCase().endsWith(".pdf"));
+      if (pdfPath) {
+        const name = pdfPath.split(/[/\\]/).pop() ?? pdfPath;
+        handleFileSelected(pdfPath, name);
+      }
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {/* drag-drop unavailable — click-to-browse still works */});
+
+    return () => {
+      unlisten?.();
+    };
+  }, [handleFileSelected]);
+
+  // ── Native file picker ────────────────────────────────────────────────────
+
+  async function handleBrowseClick() {
+    if (indexing) return;
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "PDF files", extensions: ["pdf"] }],
+    });
+    if (selected && typeof selected === "string") {
+      const name = selected.split(/[/\\]/).pop() ?? selected;
+      handleFileSelected(selected, name);
+    }
+  }
+
+  // ── Add and index ─────────────────────────────────────────────────────────
+
+  async function handleAddAndIndex() {
+    if (!pending || indexing) return;
+
+    // First click on a duplicate ID shows the confirmation prompt
+    if (sources.some((s) => s.id === docId) && !confirmReplace) {
+      setConfirmReplace(true);
+      return;
+    }
+
+    setConfirmReplace(false);
+    setIndexing(true);
+    setIndexProgress("Copying file…");
+
+    let pageCountFromEvent: number | null = null;
+    let errorFromEvent: string | null = null;
+
+    const unlisten = await listen<IngestProgressPayload>(
+      "ingest-progress",
+      (event) => {
+        if (event.payload.doc_id !== docId) return;
+        if (event.payload.status === "done") {
+          pageCountFromEvent = event.payload.page_count ?? null;
+        } else if (event.payload.status === "error") {
+          errorFromEvent = event.payload.message ?? "Unknown error";
+        }
+      },
+    );
+
+    try {
+      // Step 1 — copy file into sources/
+      const destPath = await invoke<string>("copy_source_file", {
+        srcPath: pending.path,
+        projectDir,
+        docId,
+        filename: pending.name,
+      });
+
+      setIndexProgress(
+        "Indexing pages… this may take 30–60 seconds for a large PDF",
+      );
+
+      // Step 2 — run ingest pipeline (emits ingest-progress events)
+      await invoke("ingest_source", {
+        projectDir,
+        docId,
+        filePath: destPath,
+        language,
+      });
+
+      if (errorFromEvent) {
+        throw new Error(errorFromEvent);
+      }
+
+      // Reload source list (also retrieves freshly-written page_count)
+      const fresh = await loadSources();
+      const entry = fresh.find((s) => s.id === docId);
+      const pc = entry?.page_count ?? pageCountFromEvent ?? 0;
+
+      onToast(`Indexed successfully · ${pc} pages`, "success");
+      setPending(null);
+      setDocId("");
+      setLanguage("en");
+    } catch (err) {
+      onToast(`Failed: ${String(err)}`, "error");
+    } finally {
+      unlisten();
+      setIndexing(false);
+      setIndexProgress(null);
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  return (
+    <div className="px-6 py-5 space-y-4">
+      {/* Source list */}
+      {loading ? (
+        <div className="flex items-center gap-2 py-4 text-xs text-gray-400">
+          <div className="w-3 h-3 border border-gray-300 border-t-[#1B4F23] rounded-full animate-spin" />
+          Loading sources…
+        </div>
+      ) : sources.length > 0 ? (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+            Indexed sources ({sources.length})
+          </div>
+          {sources.map((entry) => (
+            <SourceRow key={entry.id} entry={entry} />
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400 italic">
+          No source documents indexed yet.
+        </p>
+      )}
+
+      {/* Drop zone — hidden while showing the form or while indexing */}
+      {!pending && !indexing && (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+          }}
+          onClick={() => void handleBrowseClick()}
+          className={`cursor-pointer border-2 border-dashed rounded-xl p-10 text-center transition-all select-none ${
+            isDragOver
+              ? "border-[#1B4F23] bg-green-50"
+              : "border-gray-300 hover:border-gray-400 hover:bg-gray-50 bg-gray-50/50"
+          }`}
+        >
+          <div className="text-3xl mb-2">📄</div>
+          <div className="text-sm font-medium text-gray-700">
+            Drop census PDF here or click to browse
+          </div>
+          <div className="text-xs text-gray-400 mt-1">PDF files only</div>
+        </div>
+      )}
+
+      {/* Inline form — shown when a file is selected and not yet indexing */}
+      {pending && !indexing && (
+        <div className="border border-[#1B4F23]/40 rounded-xl p-4 bg-green-50/60 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
+            <span>📄</span>
+            <span className="truncate">{pending.name}</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="block text-xs text-gray-500">Document ID</label>
+              <input
+                value={docId}
+                onChange={(e) => {
+                  setDocId(e.target.value);
+                  setConfirmReplace(false);
+                }}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:border-[#1B4F23]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs text-gray-500">Language</label>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value as Language)}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:border-[#1B4F23]"
+              >
+                {LANGUAGE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Duplicate-ID confirmation prompt */}
+          {confirmReplace && (
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              A source with ID <code className="font-mono">"{docId}"</code>{" "}
+              already exists. Click "Add and index" again to replace it.
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => void handleAddAndIndex()}
+              className="text-xs font-medium text-white bg-[#1B4F23] rounded-lg px-4 py-2 hover:bg-[#163d1c] transition-colors"
+            >
+              Add and index
+            </button>
+            <button
+              onClick={() => {
+                setPending(null);
+                setDocId("");
+                setLanguage("en");
+                setConfirmReplace(false);
+              }}
+              className="text-xs text-gray-500 border border-gray-200 rounded-lg px-3 py-2 hover:border-gray-300 hover:text-gray-700 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Indexing progress */}
+      {indexing && (
+        <div className="border border-gray-200 rounded-xl p-4 bg-gray-50 flex items-center gap-3">
+          <div className="w-4 h-4 border-2 border-[#1B4F23] border-t-transparent rounded-full animate-spin shrink-0" />
+          <div className="text-sm text-gray-600">{indexProgress}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
+
+type ActiveTab = "sources" | null;
 
 const ProjectOverview: FC<ProjectOverviewProps> = ({
   project,
@@ -195,6 +578,7 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
 }) => {
   const [mrGenerating, setMrGenerating] = useState(false);
   const [tmrGenerating, setTmrGenerating] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>(null);
 
   const {
     manifest,
@@ -230,7 +614,7 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
     setTmrGenerating(true);
     void invoke<string>("generate_tmr_subtable", {
       projectDir: project.dir,
-      subTableNumber: 0, // 0 = all
+      subTableNumber: 0,
       model: "deepseek-v4-flash",
     })
       .then((msg) => {
@@ -345,15 +729,16 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
           />
         </div>
 
-        {/* Navigation tabs */}
+        {/* Navigation tabs + tab panel */}
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="border-b border-gray-200 px-2 flex gap-0 overflow-x-auto">
             <NavTab label="MR draft" onClick={onOpenMrReview} />
             <NavTab label="TMR draft" onClick={onOpenTmrReview} />
             <NavTab
               label="Sources"
+              active={activeTab === "sources"}
               onClick={() =>
-                onToast("Sources view — coming in a future session.", "info")
+                setActiveTab(activeTab === "sources" ? null : "sources")
               }
             />
             <NavTab
@@ -362,16 +747,18 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
                 onToast("Issues queue — coming in a future session.", "info")
               }
             />
-            <NavTab
-              label="Audit log"
-              onClick={onOpenAuditLog}
-            />
+            <NavTab label="Audit log" onClick={onOpenAuditLog} />
           </div>
-          <div className="px-6 py-8 text-center">
-            <p className="text-sm text-gray-400">
-              Select a tab above to begin reviewing this project.
-            </p>
-          </div>
+
+          {activeTab === "sources" ? (
+            <SourcesTab projectDir={project.dir} onToast={onToast} />
+          ) : (
+            <div className="px-6 py-8 text-center">
+              <p className="text-sm text-gray-400">
+                Select a tab above to begin reviewing this project.
+              </p>
+            </div>
+          )}
         </div>
       </main>
     </div>

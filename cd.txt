@@ -1,1 +1,4 @@
 cd "C:\Users\Dramane\Desktop\PIPELINE"
+
+cd "C:\Users\bakod\Documents\GitHub\PIPELINE_AC_MR_TMR"
+npm run tauri:dev

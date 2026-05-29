@@ -16,6 +16,7 @@
     {
       "identifier": "fs:allow-exists",
       "allow": [{ "path": "$HOME/**" }]
-    }
+    },
+    "dialog:allow-open"
   ]
 }

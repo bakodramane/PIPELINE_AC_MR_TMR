@@ -932,3 +932,93 @@ Both backed by `tauri-plugin-store` (`app.store("api_keys.json")`). Added `.plug
 
 NEXT SESSION (19): PDF/document ingestion — drag-drop or file-pick PDFs into `sources/`,
 index pages into `evidence/pages/` so generators can retrieve evidence for new country projects.
+
+---
+
+## Session 19 — Sources tab UI + ingest sidecar + pilot launcher/docs
+
+**Goals accomplished:**
+1. Real Sources tab embedded in `ProjectOverview` (list + drag-drop + file picker + index flow)
+2. `src-tauri/scripts/ingest.mjs` ingest CLI wrapper
+3. `copy_source_file` + `ingest_source` Tauri commands
+4. `launch-agcensus.bat` double-clickable launcher
+5. `PILOT-SETUP.md` + `PILOT-FEEDBACK.md` plain-English pilot docs
+
+**Frontend — `src/screens/ProjectOverview.tsx`:**
+- "Sources" NavTab is now a toggle that renders an embedded `SourcesTab` panel
+  (no new screen / no App.tsx change). Clicking other tabs still navigates as before.
+- `SourcesTab`:
+  - Reads `sources/_index.json` via `@tauri-apps/plugin-fs` `readTextFile`; renders
+    one `SourceRow` per entry (filename, doc ID, page count, language, retrieved date,
+    "Indexed ✓" green badge when `page_count > 0` else "⚠ Low confidence" amber).
+  - Drop zone: listens for the Tauri window event `tauri://drag-drop` (payload.paths)
+    AND supports click-to-browse via `@tauri-apps/plugin-dialog` `open({ filters: pdf })`.
+    HTML `<input type=file>` deliberately NOT used (can't see real FS paths in Tauri).
+  - Inline form pre-fills Document ID from filename: `NN-<sanitized-stem>` where NN =
+    `(sources.length + 1)` zero-padded. Language dropdown EN/FR/ES/AR/PT/Other (default en).
+  - "Add and index": (1) `invoke("copy_source_file", {srcPath, projectDir, docId, filename})`
+    → dest path; (2) sets progress "Indexing pages… 30–60 s"; (3) `invoke("ingest_source", …)`;
+    listens for `ingest-progress` events filtered by `doc_id`; on done reloads `_index.json`
+    and toasts "Indexed successfully · N pages"; on error red toast.
+  - Duplicate doc ID → first click shows an inline "already exists, click again to replace"
+    amber confirm; second click proceeds (ingest.mjs upserts, so replace is real).
+
+**`src-tauri/scripts/ingest.mjs`:** mirrors `export.mjs` structure. Parses
+`--project/--doc-id/--file/--language`; resolves `PIPELINE_ROOT` via `fileURLToPath`
++ `path.resolve(__dirname, "..", "..")`; dynamic-imports `ingestPdf` from
+`src/ingest/pipeline.ts` (tsx resolves the `.ts` extension); after ingest it counts
+this doc's pages from `evidence/_evidence.json`, computes SHA-256 of the copied file,
+and **upserts** both `sources/_index.json` (SourceIndexEntry) and
+`manifest.json.source_documents` (removes any prior entry with the same id first).
+Prints `DONE:<pageCount>` or `ERROR:<msg>`; always exits 0.
+
+**`src-tauri/src/lib.rs`:**
+- `copy_source_file(src_path, project_dir, doc_id, filename) -> Result<String>` — sync,
+  `std::fs::create_dir_all(sources/)` + `std::fs::copy` to `sources/<doc_id>-<filename>`,
+  returns dest path. Mirrors `create_project` style.
+- `ingest_source(app, project_dir, doc_id, file_path, language) -> Result<()>` — async,
+  spawns `node <tsx-cli> ingest.mjs …` via `app.shell()`, line-buffers stdout, emits
+  `ingest-progress` `{ doc_id, status, page_count, message }` on DONE:/ERROR:. Mirrors
+  `generate_mr_sections` exactly. New `IngestProgressPayload` struct (Serialize+Clone).
+- Registered both in `generate_handler!`; added `.plugin(tauri_plugin_dialog::init())`.
+
+**Config:**
+- `src-tauri/Cargo.toml`: `tauri-plugin-dialog = "2"`.
+- `src-tauri/capabilities/default.json`: added `"dialog:allow-open"`.
+- `package.json`: `@tauri-apps/plugin-dialog ^2.7.1` (npm install).
+
+**Pilot deliverables (project root):** `launch-agcensus.bat`, `PILOT-SETUP.md`,
+`PILOT-FEEDBACK.md` — verbatim per spec.
+
+---
+
+## Session 19 notes
+
+VERIFICATION DONE: `npx tsc --noEmit` → zero errors. Vite dev server (the one
+`tauri dev` uses for the frontend) serves HTTP 200 and transforms
+`ProjectOverview.tsx` + `@tauri-apps/plugin-dialog` cleanly.
+
+ENVIRONMENT BLOCKER (NEW MACHINE): This checkout is on `C:\Users\bakod\…`, a
+DIFFERENT machine from the Session 1–18 `C:\Users\Dramane\…` logs. It has **no
+native C/C++ build toolchain** — no MSVC `link.exe`/`cl.exe`, no Windows SDK
+import libs (`kernel32.lib`), no clang/lld-link. `target/debug` has never produced
+an `.exe`. Therefore `cargo check` / `npm run tauri:dev` cannot LINK here — this is
+an environment gap, NOT a code defect. Fix: install Visual Studio Build Tools 2022
+with the "Desktop development with C++" workload + Windows SDK, then restart the
+terminal. `rust-lld.exe` ships with rustup but still needs the SDK import libs.
+
+PRE-EXISTING BUILD ISSUE (not from this session): `npm run build` (production Vite)
+fails because `@anthropic-ai/sdk` (added Session 18) imports `node:crypto`
+(`randomUUID`) which Rollup can't externalize for the browser bundle. `tauri:dev`
+uses the Vite DEV server (esbuild) and is unaffected. If a production bundle is ever
+needed, the anthropic SDK import will need isolating behind a Node-only entry or a
+Vite `define`/alias for `node:crypto`.
+
+DRAG-DROP IN TAURI: Tauri v2 webviews do NOT fire HTML5 `drop` events with real file
+paths by default — the OS drop is captured by the window. Use the
+`tauri://drag-drop` window event (payload `{ paths: string[] }`) instead. The CSS
+`onDragOver`/`onDragLeave` handlers are kept only for the hover highlight.
+
+NEXT SESSION (20): Issues queue screen (the last placeholder NavTab), and wire
+`source_added`/`evidence_indexed` audit events through to the Audit log viewer so
+newly-ingested sources show up in the chronological log.

@@ -32,6 +32,16 @@ struct GenerationProgressPayload {
     message: Option<String>,
 }
 
+/// Payload of the "ingest-progress" global Tauri event.
+#[derive(Serialize, Clone)]
+struct IngestProgressPayload {
+    doc_id: String,
+    /// "done" | "error"
+    status: String,
+    page_count: Option<u32>,
+    message: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
@@ -508,6 +518,126 @@ fn open_path(path: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Copy source file command
+// ---------------------------------------------------------------------------
+
+/// Copy a PDF from an arbitrary location into `<project_dir>/sources/`.
+///
+/// Returns the absolute path of the copied file.
+#[tauri::command]
+fn copy_source_file(
+    src_path: String,
+    project_dir: String,
+    doc_id: String,
+    filename: String,
+) -> Result<String, String> {
+    use std::fs;
+    use std::path::Path;
+
+    let sources_dir = Path::new(&project_dir).join("sources");
+    fs::create_dir_all(&sources_dir)
+        .map_err(|e| format!("Failed to create sources directory: {e}"))?;
+
+    let dest = sources_dir.join(format!("{doc_id}-{filename}"));
+    fs::copy(&src_path, &dest)
+        .map_err(|e| format!("Failed to copy file: {e}"))?;
+
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// Ingest source command
+// ---------------------------------------------------------------------------
+
+/// Run the ingest pipeline for one PDF source document.
+///
+/// Spawns `node <tsx-cli.mjs> ingest.mjs --project ... --doc-id ... --file ... --language ...`
+/// and streams progress events ("ingest-progress") back to the frontend.
+#[tauri::command]
+async fn ingest_source(
+    app: tauri::AppHandle,
+    project_dir: String,
+    doc_id: String,
+    file_path: String,
+    language: String,
+) -> Result<(), String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
+    let root = manifest_dir
+        .parent()
+        .expect("src-tauri must have a parent directory")
+        .to_path_buf(); // …/PIPELINE
+
+    let tsx_cli = root
+        .join("node_modules")
+        .join("tsx")
+        .join("dist")
+        .join("cli.mjs");
+    let script = manifest_dir.join("scripts").join("ingest.mjs");
+
+    let args = vec![
+        tsx_cli.to_string_lossy().into_owned(),
+        script.to_string_lossy().into_owned(),
+        "--project".to_string(),
+        project_dir,
+        "--doc-id".to_string(),
+        doc_id.clone(),
+        "--file".to_string(),
+        file_path,
+        "--language".to_string(),
+        language,
+    ];
+
+    let (mut rx, _child) = app
+        .shell()
+        .command("node")
+        .args(&args)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ingest process: {e}"))?;
+
+    let mut buf = String::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim_end_matches('\r').to_string();
+                    buf = buf[pos + 1..].to_string();
+
+                    if let Some(rest) = line.strip_prefix("DONE:") {
+                        let page_count = rest.trim().parse::<u32>().ok();
+                        let _ = app.emit(
+                            "ingest-progress",
+                            IngestProgressPayload {
+                                doc_id: doc_id.clone(),
+                                status: "done".to_string(),
+                                page_count,
+                                message: None,
+                            },
+                        );
+                    } else if let Some(rest) = line.strip_prefix("ERROR:") {
+                        let _ = app.emit(
+                            "ingest-progress",
+                            IngestProgressPayload {
+                                doc_id: doc_id.clone(),
+                                status: "error".to_string(),
+                                page_count: None,
+                                message: Some(rest.trim().to_string()),
+                            },
+                        );
+                    }
+                }
+            }
+            CommandEvent::Stderr(_) => {}
+            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Create project command
 // ---------------------------------------------------------------------------
 
@@ -563,6 +693,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             generate_mr_sections,
             generate_tmr_subtable,
@@ -573,6 +704,8 @@ pub fn run() {
             open_path,
             save_api_key,
             get_api_key,
+            copy_source_file,
+            ingest_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");
