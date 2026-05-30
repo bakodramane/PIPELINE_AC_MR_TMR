@@ -43,7 +43,8 @@ export async function callKimi(
   const baseParams = {
     model: KIMI_MODEL,
     messages,
-    ...(options.temperature !== undefined && { temperature: options.temperature }),
+    // Kimi K2.6 API only accepts temperature: 1.0 — override caller's value.
+    temperature: 1.0,
     ...(options.maxTokens !== undefined && { max_tokens: options.maxTokens }),
     ...(options.responseFormat === "json" && {
       response_format: { type: "json_object" as const },

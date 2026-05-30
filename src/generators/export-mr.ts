@@ -51,22 +51,16 @@ function extractPageNum(pageId: string): string {
  * Export the MR to Markdown.
  *
  * @param projectDir  Absolute path to the country project directory.
- * @param clean       When true, only sections with `approved: true` show their
- *                    claims; non-approved sections get the WCA "not available"
- *                    boilerplate.  The output filename has no `-draft` suffix.
- *                    When false (default), all sections are included as-is
- *                    and the filename carries a `-draft` suffix.
+ * @param clean       When true, all sections that have generated claims are shown
+ *                    (approval status is irrelevant — approval is a separate workflow
+ *                    that does not gate the export).  The output filename has no
+ *                    `-draft` suffix and is suitable for external distribution.
+ *                    When false (default), the same content is included but the
+ *                    filename carries a `-draft` suffix to flag it as internal.
  */
 export async function exportMr(projectDir: string, clean = false): Promise<string> {
   // ── Read inputs ──────────────────────────────────────────────────────────
   const manifest = await readJson<Manifest>(path.join(projectDir, "manifest.json"));
-
-  // Section entries may carry runtime-only fields (approved, truncated_warning)
-  // that are not in the base SectionClaims schema type.
-  type SectionEntry = (typeof claimsJson)[string] & {
-    approved?: boolean;
-    truncated_warning?: boolean;
-  };
 
   let claimsJson: ClaimsJson = {};
   try {
@@ -89,14 +83,11 @@ export async function exportMr(projectDir: string, clean = false): Promise<strin
     const title = MR_SECTION_TITLES[n] ?? `Section ${n}`;
     md += `### ${n}. ${title}\n\n`;
 
-    const sectionData = claimsJson[`section_${n}`] as SectionEntry | undefined;
-    const isApproved  = sectionData?.approved === true;
+    const sectionData = claimsJson[`section_${n}`];
 
-    // In clean mode only approved sections show their claims; everything else
-    // gets the standard "not available" boilerplate.
-    const showClaims = !clean || isApproved;
-
-    if (!showClaims || !sectionData || sectionData.claims.length === 0) {
+    // Show "not available" only when the generator found no sourceable content
+    // for this section (zero claims).  Approval status does not gate the export.
+    if (!sectionData || sectionData.claims.length === 0) {
       md +=
         `*Information on this point was not available in the source documents provided.*\n\n`;
     } else {

@@ -810,17 +810,14 @@ const MrReview: FC<MrReviewProps> = ({
               </div>
             )}
           </div>
-          {/* Four export buttons: Draft MD · Draft DOCX | Clean MD · Clean DOCX */}
+          {/* Two export buttons: Draft DOCX · Clean DOCX */}
           <div className="flex items-center gap-1">
-            {(["mr", "mr-docx", "mr-clean", "mr-docx-clean"] as const).map(
+            {(["mr-docx", "mr-docx-clean"] as const).map(
               (type) => {
                 const isThis   = exportingType === type;
                 const disabled = exportingType !== null || generating;
                 const label    =
-                  type === "mr"            ? "↓ Draft MD"
-                  : type === "mr-docx"     ? "↓ Draft DOCX"
-                  : type === "mr-clean"    ? "↓ Clean MD"
-                  : "↓ Clean DOCX";
+                  type === "mr-docx" ? "↓ Draft DOCX" : "↓ Clean DOCX";
                 return (
                   <button
                     key={type}

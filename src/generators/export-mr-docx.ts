@@ -56,19 +56,14 @@ function hRule(): Paragraph {
  * Export the MR to Word (.docx).
  *
  * @param projectDir  Absolute path to the country project directory.
- * @param clean       When true, only sections with `approved: true` show their
- *                    claims; non-approved sections get the WCA "not available"
- *                    boilerplate.  The output filename has no `-draft` suffix.
- *                    When false (default), all sections are included as-is
- *                    and the filename carries a `-draft` suffix.
+ * @param clean       When true, all sections that have generated claims are shown
+ *                    (approval status is irrelevant — approval is a separate workflow
+ *                    that does not gate the export).  The output filename has no
+ *                    `-draft` suffix and is suitable for external distribution.
+ *                    When false (default), the same content is included but the
+ *                    filename carries a `-draft` suffix to flag it as internal.
  */
 export async function exportMrDocx(projectDir: string, clean = false): Promise<string> {
-  // Section entries may carry runtime-only fields not in the base schema type.
-  type SectionEntry = (typeof claimsJson)[string] & {
-    approved?: boolean;
-    truncated_warning?: boolean;
-  };
-
   const manifest = await readJson<Manifest>(
     path.join(projectDir, "manifest.json"),
   );
@@ -147,12 +142,11 @@ export async function exportMrDocx(projectDir: string, clean = false): Promise<s
       }),
     );
 
-    const sectionData  = claimsJson[`section_${n}`] as SectionEntry | undefined;
-    const isApproved   = sectionData?.approved === true;
-    // In clean mode only approved sections show their claims.
-    const showClaims   = !clean || isApproved;
+    const sectionData = claimsJson[`section_${n}`];
 
-    if (!showClaims || !sectionData || sectionData.claims.length === 0) {
+    // Show "not available" only when the generator found no sourceable content
+    // for this section (zero claims).  Approval status does not gate the export.
+    if (!sectionData || sectionData.claims.length === 0) {
       children.push(
         new Paragraph({
           children: [
