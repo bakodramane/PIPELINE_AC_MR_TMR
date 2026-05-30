@@ -23,6 +23,12 @@ export interface GenerateOptions {
   temperature?: number;
   responseFormat?: "text" | "json";
   onStream?: (chunk: string) => void;
+  /**
+   * When true, explicitly disable thinking on models that support it
+   * (currently DeepSeek V4 Pro).  Use for data-extraction tasks where
+   * reasoning traces consume token budget without improving accuracy.
+   */
+  disableThinking?: boolean;
 }
 
 export interface GenerateResult {

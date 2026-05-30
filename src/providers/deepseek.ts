@@ -33,11 +33,12 @@ export async function callDeepSeek(
     { role: "user", content: options.userPrompt },
   ];
 
-  // V4-Flash: explicitly disable thinking so content is populated and
-  // max_tokens is not consumed entirely by the reasoning trace.
-  // V4-Pro: leave thinking at its default (enabled) — it is the reasoning model.
+  // V4-Flash always disables thinking (API requires it — content is empty otherwise).
+  // V4-Pro disables thinking when disableThinking: true is passed by the caller
+  // (e.g. TMR data-extraction, where reasoning traces consume budget without gain).
+  // V4-Pro without the flag keeps thinking enabled — MR narrative generation benefits.
   const thinkingParam =
-    options.model === "deepseek-v4-flash"
+    options.model === "deepseek-v4-flash" || options.disableThinking === true
       ? { thinking: { type: "disabled" } }
       : {};
 

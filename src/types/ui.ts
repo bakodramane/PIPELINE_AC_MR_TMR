@@ -155,6 +155,12 @@ export interface SubTableInfo {
   truncatedWarning: boolean;
   /** All cells keyed by canonical cell key (e.g. "Total_Holdings") */
   cells: Record<string, TmrCellDisplay>;
+  /**
+   * First 200 characters of the raw model response, present when
+   * status === "parse_failed".  Used to surface parse errors in the UI
+   * without requiring the user to open _cells.json.
+   */
+  rawPreview?: string;
 }
 
 // ---------------------------------------------------------------------------

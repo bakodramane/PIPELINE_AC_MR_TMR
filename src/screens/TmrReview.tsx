@@ -144,6 +144,8 @@ const NON_CELL_KEYS = new Set([
   "parse_failed",
   "truncated",
   "raw_response",
+  "raw_preview",
+  "error",
 ]);
 
 function parseSubTableEntry(
@@ -153,6 +155,8 @@ function parseSubTableEntry(
 ): SubTableInfo {
   const parseFailed = rawEntry.parse_failed === true;
   const truncatedWarning = rawEntry.truncated === true;
+  const rawPreview =
+    typeof rawEntry.raw_preview === "string" ? rawEntry.raw_preview : undefined;
   const totalCells = spec.rows.length * Object.keys(spec.columns).length;
 
   const validationFlags: ValidationFlagDisplay[] = Array.isArray(
@@ -207,6 +211,7 @@ function parseSubTableEntry(
     validationFlags,
     truncatedWarning,
     cells,
+    rawPreview,
   };
 }
 
@@ -543,11 +548,20 @@ function SubTableCard({
               sub-tables" button above or click "Generate sub-table" below.
             </p>
           ) : subTable.status === "parse_failed" ? (
-            <p className="text-sm text-red-500 italic">
-              JSON parse failed — the model output was truncated or malformed.
-              Check <code className="text-xs">drafts/tmr/_cells.json</code>{" "}
-              for the raw output.
-            </p>
+            <div>
+              <p className="text-sm text-red-500 italic mb-2">
+                JSON parse failed — the model output was truncated or malformed.
+                Check{" "}
+                <code className="text-xs">drafts/tmr/_cells.json</code> for
+                the full raw output.
+              </p>
+              {subTable.rawPreview && (
+                <pre className="text-[10px] font-mono text-red-400 bg-red-50 border border-red-200 rounded p-2 overflow-hidden whitespace-pre-wrap break-all leading-relaxed">
+                  {subTable.rawPreview.slice(0, 100)}
+                  {subTable.rawPreview.length > 100 ? "…" : ""}
+                </pre>
+              )}
+            </div>
           ) : (
             <CellGrid subTable={subTable} />
           )}

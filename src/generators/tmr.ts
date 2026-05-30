@@ -79,18 +79,24 @@ const WCA_CONCEPTS_PATH = path.resolve(
 /** Acres to hectares conversion factor (exact). */
 const ACRES_TO_HA = 0.4047;
 
-/** maxTokens for all sub-table generation calls (default). */
-const MAX_TOKENS = 1024;
+/**
+ * Default maxTokens for all sub-table generation calls.
+ * Raised from 1024 → 4096 to cover thinking-model overhead on DeepSeek V4 Pro
+ * and Kimi K2.6-thinking.  The actual JSON payload for one sub-table is only
+ * 300–500 tokens; the extra headroom is consumed by reasoning traces on
+ * thinking models and costs negligibly more at DeepSeek flash pricing.
+ */
+const MAX_TOKENS = 4096;
 
 /**
  * Per-sub-table maxTokens overrides.
- * Sub-tables 3 (Holdings by parcels) and 17 (Irrigation source) hit the 1024
- * limit in Session 10 runs, causing JSON truncation. Raised to 1500.
+ * All formerly-problematic sub-tables (3, 8, 17) are now at 4096 — same as
+ * the default.  Kept explicit so the rationale is visible in code review.
  */
 const SUB_TABLE_MAX_TOKENS: Record<number, number> = {
-  3: 1500,
-  8: 1500,
-  17: 1500,
+  3: 4096,
+  8: 4096,
+  17: 4096,
 };
 
 /**
@@ -843,6 +849,9 @@ export async function generateSubTable(
   let costUsdTotal = 0;
   let lastModel: Model = model;
   let lastProvider = "";
+  // Capture the raw model text from the most recent failed parse so it can
+  // be stored as raw_preview in _cells.json for debugging without opening files.
+  let lastRawResponse = "";
 
   for (const singleRow of rowsToProcess) {
     // Cells to populate on this call: all cells (single-call) or this row's cells
@@ -878,6 +887,10 @@ export async function generateSubTable(
       // temperature=0 for data extraction: deterministic responses reduce the
       // risk of the model hallucinating or omitting values across runs.
       temperature: 0,
+      // Disable thinking for TMR: data extraction just needs to find a number
+      // and return JSON.  Reasoning traces consume token budget without
+      // improving accuracy, and can cause truncation on V4 Pro.
+      disableThinking: true,
     });
     wallTotal += Date.now() - wallStart;
     inputTokensTotal += result.inputTokens;
@@ -899,6 +912,7 @@ export async function generateSubTable(
       }
     } catch {
       anyParseFailed = true;
+      lastRawResponse = result.text; // preserve for raw_preview in _cells.json
       continue; // skip this row/call but continue with others
     }
 
@@ -942,7 +956,8 @@ export async function generateSubTable(
     cellsJson[subTableKey] = {
       parse_failed: true,
       ...(anyTruncated && { truncated: true }),
-      raw_response: "(all row calls failed to parse)",
+      raw_preview: lastRawResponse.slice(0, 200),
+      error: "JSON parse failed",
       validation_flags: [],
     };
     await writeJson(cellsJsonPath, cellsJson);
