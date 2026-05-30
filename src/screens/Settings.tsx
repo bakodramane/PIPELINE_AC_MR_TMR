@@ -16,7 +16,6 @@
 
 import { useState, useEffect, type FC } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { testApiConnection } from "../providers/index";
 import { MODELS_BY_TIER, DEFAULT_MR_MODEL, DEFAULT_TMR_MODEL } from "../providers/model-registry";
 import type { Provider, Model } from "../providers/types";
 import type { ToastMessage } from "../types/ui";
@@ -52,8 +51,8 @@ const PROVIDERS: ProviderConfig[] = [
   },
   {
     id: "kimi",
-    displayName: "Moonshot / Kimi",
-    envVar: "KIMI_API_KEY",
+    displayName: "Moonshot / Kimi API key",
+    envVar: "MOONSHOT_API_KEY or KIMI_API_KEY",
     docsUrl: "https://platform.moonshot.cn/console/api-keys",
     accentColor: "bg-purple-50 border-purple-200 text-purple-700",
   },
@@ -154,31 +153,28 @@ function ApiKeyRow({ config }: { config: ProviderConfig }) {
 
     setConnStatus({ kind: "testing" });
 
-    // If user typed a new key, test that; otherwise, load from store
-    if (keyToTest) {
-      const result = await testApiConnection(config.id, keyToTest);
-      if (result.success) {
-        setConnStatus({ kind: "ok", latencyMs: result.latencyMs });
+    // Route the test through the Node.js sidecar to avoid browser CORS
+    // restrictions that block direct calls to provider APIs from the webview.
+    try {
+      let apiKey: string;
+      if (keyToTest) {
+        apiKey = keyToTest;
       } else {
-        setConnStatus({ kind: "error", msg: result.error ?? "Unknown error" });
-      }
-    } else {
-      // Test the stored key — retrieve it then test
-      try {
+        // Test the stored key — retrieve it first
         const storedKey = await invoke<string | null>("get_api_key", { provider: config.id });
         if (!storedKey) {
           setConnStatus({ kind: "error", msg: "No key stored" });
           return;
         }
-        const result = await testApiConnection(config.id, storedKey);
-        if (result.success) {
-          setConnStatus({ kind: "ok", latencyMs: result.latencyMs });
-        } else {
-          setConnStatus({ kind: "error", msg: result.error ?? "Unknown error" });
-        }
-      } catch (err) {
-        setConnStatus({ kind: "error", msg: String(err) });
+        apiKey = storedKey;
       }
+      const latencyStr = await invoke<string>("test_api_connection_cmd", {
+        provider: config.id,
+        apiKey,
+      });
+      setConnStatus({ kind: "ok", latencyMs: parseInt(latencyStr, 10) });
+    } catch (err) {
+      setConnStatus({ kind: "error", msg: String(err) });
     }
   }
 
@@ -467,8 +463,8 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
           </h2>
           <div className="bg-white border border-gray-200 rounded-lg px-5 py-4 text-xs text-gray-500 space-y-1">
             <div className="flex items-center justify-between">
-              <span>AgCensus Compiler</span>
-              <span className="font-mono text-gray-400">Session 18</span>
+              <span>Ag Census MR TMR Compiler</span>
+              <span className="font-mono text-gray-400">Session 22</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Supported providers</span>

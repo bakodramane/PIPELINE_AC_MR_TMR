@@ -90,8 +90,9 @@ async function main() {
       writeLine("ERROR:Missing required --project argument");
       return;
     }
-    if (args.type !== "tmr" && args.type !== "mr") {
-      writeLine("ERROR:Missing or invalid --type argument — must be 'mr' or 'tmr'");
+    const VALID_TYPES = ["tmr", "mr", "mr-draft", "mr-docx", "mr-docx-draft", "mr-clean", "mr-docx-clean"];
+    if (!VALID_TYPES.includes(args.type)) {
+      writeLine(`ERROR:Missing or invalid --type argument — must be one of: ${VALID_TYPES.join(", ")}`);
       return;
     }
 
@@ -106,7 +107,30 @@ async function main() {
       }
       const outputPath = await mod.exportTmr(args.project);
       writeLine(`DONE:${outputPath}`);
-    } else {
+    } else if (args.type === "mr-docx" || args.type === "mr-docx-draft") {
+      // mr-docx and mr-docx-draft → draft DOCX (clean = false)
+      let mod;
+      try {
+        mod = await import("../../src/generators/export-mr-docx.ts");
+      } catch (err) {
+        writeLine(`ERROR:Cannot load MR DOCX export module: ${sanitise(String(err))}`);
+        return;
+      }
+      const outputPath = await mod.exportMrDocx(args.project, false);
+      writeLine(`DONE:${outputPath}`);
+    } else if (args.type === "mr-docx-clean") {
+      // mr-docx-clean → approved-only DOCX (clean = true)
+      let mod;
+      try {
+        mod = await import("../../src/generators/export-mr-docx.ts");
+      } catch (err) {
+        writeLine(`ERROR:Cannot load MR DOCX export module: ${sanitise(String(err))}`);
+        return;
+      }
+      const outputPath = await mod.exportMrDocx(args.project, true);
+      writeLine(`DONE:${outputPath}`);
+    } else if (args.type === "mr-clean") {
+      // mr-clean → approved-only Markdown (clean = true)
       let mod;
       try {
         mod = await import("../../src/generators/export-mr.ts");
@@ -114,7 +138,18 @@ async function main() {
         writeLine(`ERROR:Cannot load MR export module: ${sanitise(String(err))}`);
         return;
       }
-      const outputPath = await mod.exportMr(args.project);
+      const outputPath = await mod.exportMr(args.project, true);
+      writeLine(`DONE:${outputPath}`);
+    } else {
+      // mr and mr-draft → draft Markdown (clean = false)
+      let mod;
+      try {
+        mod = await import("../../src/generators/export-mr.ts");
+      } catch (err) {
+        writeLine(`ERROR:Cannot load MR export module: ${sanitise(String(err))}`);
+        return;
+      }
+      const outputPath = await mod.exportMr(args.project, false);
       writeLine(`DONE:${outputPath}`);
     }
   } catch (err) {

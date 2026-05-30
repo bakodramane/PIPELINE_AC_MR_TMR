@@ -7,7 +7,7 @@ export type Model =
   | "gpt-4o-mini"
   // Tier 2 — Mid-range
   | "deepseek-v4-pro"
-  | "kimi-k2.6-non-thinking"
+  | "kimi-k2.6"
   | "kimi-k2.6-thinking"
   | "gemini-2.5-flash"
   // Tier 3 — Premium

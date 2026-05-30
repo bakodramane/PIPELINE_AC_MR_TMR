@@ -47,9 +47,26 @@ function extractPageNum(pageId: string): string {
 // Export
 // ---------------------------------------------------------------------------
 
-export async function exportMr(projectDir: string): Promise<string> {
+/**
+ * Export the MR to Markdown.
+ *
+ * @param projectDir  Absolute path to the country project directory.
+ * @param clean       When true, only sections with `approved: true` show their
+ *                    claims; non-approved sections get the WCA "not available"
+ *                    boilerplate.  The output filename has no `-draft` suffix.
+ *                    When false (default), all sections are included as-is
+ *                    and the filename carries a `-draft` suffix.
+ */
+export async function exportMr(projectDir: string, clean = false): Promise<string> {
   // ── Read inputs ──────────────────────────────────────────────────────────
   const manifest = await readJson<Manifest>(path.join(projectDir, "manifest.json"));
+
+  // Section entries may carry runtime-only fields (approved, truncated_warning)
+  // that are not in the base SectionClaims schema type.
+  type SectionEntry = (typeof claimsJson)[string] & {
+    approved?: boolean;
+    truncated_warning?: boolean;
+  };
 
   let claimsJson: ClaimsJson = {};
   try {
@@ -72,9 +89,14 @@ export async function exportMr(projectDir: string): Promise<string> {
     const title = MR_SECTION_TITLES[n] ?? `Section ${n}`;
     md += `### ${n}. ${title}\n\n`;
 
-    const sectionData = claimsJson[`section_${n}`];
+    const sectionData = claimsJson[`section_${n}`] as SectionEntry | undefined;
+    const isApproved  = sectionData?.approved === true;
 
-    if (!sectionData || sectionData.claims.length === 0) {
+    // In clean mode only approved sections show their claims; everything else
+    // gets the standard "not available" boilerplate.
+    const showClaims = !clean || isApproved;
+
+    if (!showClaims || !sectionData || sectionData.claims.length === 0) {
       md +=
         `*Information on this point was not available in the source documents provided.*\n\n`;
     } else {
@@ -96,7 +118,9 @@ export async function exportMr(projectDir: string): Promise<string> {
   // ── Write output file ─────────────────────────────────────────────────────
   const outputDir = path.join(projectDir, "exports");
   await mkdir(outputDir, { recursive: true });
-  const filename = `${manifest.country_iso3.toLowerCase()}-mr-${today}.md`;
+  // Draft files get a -draft suffix; clean (final) files do not.
+  const suffix   = clean ? "" : "-draft";
+  const filename = `${manifest.country_iso3.toLowerCase()}-mr-${today}${suffix}.md`;
   const outputPath = path.join(outputDir, filename);
 
   await writeFile(outputPath, md, "utf-8");

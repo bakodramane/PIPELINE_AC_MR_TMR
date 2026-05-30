@@ -575,7 +575,7 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
           </div>
           <div>
             <div className="text-sm font-semibold leading-tight">
-              AgCensus Compiler
+              Ag Census MR TMR Compiler
             </div>
             <div className="text-[10px] text-green-200 leading-tight">
               FAO WCA 2020

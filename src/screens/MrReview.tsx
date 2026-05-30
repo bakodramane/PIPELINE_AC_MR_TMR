@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, type FC } from "react";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ClaimsJson, Claim } from "../project/schema";
@@ -58,6 +58,25 @@ interface GenerationProgressPayload {
 
 function joinPath(...parts: string[]): string {
   return parts.map((p) => p.replace(/[/\\]+$/, "")).join("/");
+}
+
+// ---------------------------------------------------------------------------
+// Timestamp formatter — "DD Mon YYYY, HH:MM" in local time
+// ---------------------------------------------------------------------------
+
+const MONTH_NAMES = [
+  "Jan","Feb","Mar","Apr","May","Jun",
+  "Jul","Aug","Sep","Oct","Nov","Dec",
+];
+
+function formatLastRun(isoStr: string): string {
+  const d = new Date(isoStr);
+  const dd   = String(d.getDate()).padStart(2, "0");
+  const mon  = MONTH_NAMES[d.getMonth()] ?? "???";
+  const yyyy = d.getFullYear();
+  const hh   = String(d.getHours()).padStart(2, "0");
+  const mm   = String(d.getMinutes()).padStart(2, "0");
+  return `${dd} ${mon} ${yyyy}, ${hh}:${mm}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -500,7 +519,10 @@ const MrReview: FC<MrReviewProps> = ({
     done: number;
     total: number;
   } | null>(null);
-  const [exporting, setExporting] = useState(false);
+  // null  → not exporting; "mr" | "mr-docx" | "mr-clean" | "mr-docx-clean"
+  const [exportingType, setExportingType] = useState<string | null>(null);
+  // ISO 8601 timestamp of the most recent MR generation run, or "" if none
+  const [lastRunAt, setLastRunAt] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<Model>(
     () =>
       (localStorage.getItem("agcensus_mr_model") as Model | null) ??
@@ -583,6 +605,57 @@ const MrReview: FC<MrReviewProps> = ({
     };
   }, [projectDir]);
 
+  // ── Load last MR run timestamp from audit JSONL files ───────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLastRun() {
+      try {
+        const auditDir = joinPath(projectDir, "audit");
+        const entries  = await readDir(auditDir);
+        const jsonlFiles = entries.filter(
+          (e) => !e.isDirectory && e.name.endsWith(".jsonl"),
+        );
+
+        let latestTimestamp = "";
+        for (const file of jsonlFiles) {
+          const content = await readTextFile(joinPath(auditDir, file.name));
+          for (const line of content.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const event = JSON.parse(trimmed) as {
+                type?: string;
+                target?: string;
+                timestamp?: string;
+              };
+              if (
+                event.type === "generation_completed" &&
+                event.target === "mr" &&
+                typeof event.timestamp === "string"
+              ) {
+                if (!latestTimestamp || event.timestamp > latestTimestamp) {
+                  latestTimestamp = event.timestamp;
+                }
+              }
+            } catch {
+              // skip malformed JSONL lines
+            }
+          }
+        }
+
+        if (!cancelled) setLastRunAt(latestTimestamp);
+      } catch {
+        // audit directory may not exist yet on first use
+        if (!cancelled) setLastRunAt("");
+      }
+    }
+
+    void loadLastRun();
+    return () => { cancelled = true; };
+  }, [projectDir]);
+
   // ── Reload a single section from disk ────────────────────────────────────
 
   const reloadSection = useCallback(
@@ -635,21 +708,26 @@ const MrReview: FC<MrReviewProps> = ({
     [projectDir],
   );
 
-  // ── Export MD ─────────────────────────────────────────────────────────────
+  // ── Export (all four variants share one handler) ─────────────────────────
+  //
+  //   exportType: "mr"           → draft Markdown  (filename: …-draft.md)
+  //   exportType: "mr-docx"      → draft Word       (filename: …-draft.docx)
+  //   exportType: "mr-clean"     → approved-only MD (filename: ….md)
+  //   exportType: "mr-docx-clean"→ approved-only DOCX (filename: ….docx)
 
-  async function handleExport() {
-    setExporting(true);
+  async function handleExport(exportType: string) {
+    setExportingType(exportType);
     try {
       const outputPath = await invoke<string>("export_project", {
         projectDir,
-        exportType: "mr",
+        exportType,
       });
       const filename = outputPath.split(/[/\\]/).pop() ?? outputPath;
-      onToast(`MR exported to ${filename}`, "success");
+      onToast(`Exported to ${filename}`, "success");
     } catch (err) {
       onToast(`Export failed: ${String(err)}`, "error");
     } finally {
-      setExporting(false);
+      setExportingType(null);
     }
   }
 
@@ -715,33 +793,58 @@ const MrReview: FC<MrReviewProps> = ({
           >
             ← Back
           </button>
-          <div className="flex-1">
-            <div className="text-sm font-semibold leading-tight">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold leading-tight truncate">
               {projectName}
             </div>
             <div className="text-[10px] text-green-200">
               Metadata Review Draft
             </div>
-          </div>
-          {/* Export MD — outline style to distinguish from the generate button */}
-          <button
-            onClick={() => void handleExport()}
-            disabled={exporting || generating}
-            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors ${
-              exporting || generating
-                ? "border-white/20 text-white/30 cursor-not-allowed"
-                : "border-white/40 text-white/80 hover:bg-white/10 hover:border-white/60"
-            }`}
-          >
-            {exporting ? (
-              <>
-                <div className="w-3 h-3 border border-white/40 border-t-transparent rounded-full animate-spin" />
-                Exporting…
-              </>
+            {lastRunAt ? (
+              <div className="text-[10px] text-green-300 mt-0.5">
+                Last run: {formatLastRun(lastRunAt)}
+              </div>
             ) : (
-              <>↓ Export MD</>
+              <div className="text-[10px] text-green-500/50 mt-0.5">
+                Last run: never
+              </div>
             )}
-          </button>
+          </div>
+          {/* Four export buttons: Draft MD · Draft DOCX | Clean MD · Clean DOCX */}
+          <div className="flex items-center gap-1">
+            {(["mr", "mr-docx", "mr-clean", "mr-docx-clean"] as const).map(
+              (type) => {
+                const isThis   = exportingType === type;
+                const disabled = exportingType !== null || generating;
+                const label    =
+                  type === "mr"            ? "↓ Draft MD"
+                  : type === "mr-docx"     ? "↓ Draft DOCX"
+                  : type === "mr-clean"    ? "↓ Clean MD"
+                  : "↓ Clean DOCX";
+                return (
+                  <button
+                    key={type}
+                    onClick={() => void handleExport(type)}
+                    disabled={disabled}
+                    className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-2 rounded-lg border transition-colors ${
+                      disabled
+                        ? "border-white/20 text-white/30 cursor-not-allowed"
+                        : "border-white/40 text-white/80 hover:bg-white/10 hover:border-white/60"
+                    }`}
+                  >
+                    {isThis ? (
+                      <>
+                        <div className="w-3 h-3 border border-white/40 border-t-transparent rounded-full animate-spin" />
+                        Exporting…
+                      </>
+                    ) : (
+                      label
+                    )}
+                  </button>
+                );
+              },
+            )}
+          </div>
           <button
             onClick={() => void handleGenerateAll()}
             disabled={generating}

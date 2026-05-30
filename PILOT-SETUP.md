@@ -1,4 +1,4 @@
-# AgCensus Compiler — Pilot Setup Guide
+# Ag Census MR TMR Compiler — Pilot Setup Guide
 
 ## What you need (one-time setup, ~10 minutes)
 
@@ -7,7 +7,7 @@
 
 2. **Start the app** — double-click `launch-agcensus.bat` in the project folder.
    The first launch takes 2–3 minutes (it is building the app).
-   A window titled "AgCensus Compiler" will open.
+   A window titled "Ag Census MR TMR Compiler" will open.
    Subsequent launches take about 15 seconds.
 
 ## Adding your API key (one-time, ~2 minutes)

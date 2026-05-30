@@ -45,7 +45,7 @@ type Model =
   | "gpt-4o-mini"
   // Tier 2
   | "deepseek-v4-pro"
-  | "kimi-k2.6-non-thinking"
+  | "kimi-k2.6"
   | "kimi-k2.6-thinking"
   | "gemini-2.5-flash"
   // Tier 3
@@ -166,6 +166,11 @@ async function main(): Promise<void> {
       if (envVar && !process.env[envVar]) {
         process.env[envVar] = args.apiKey;
       }
+    }
+
+    // Alias MOONSHOT_API_KEY → KIMI_API_KEY so either env var works
+    if (!process.env["KIMI_API_KEY"] && process.env["MOONSHOT_API_KEY"]) {
+      process.env["KIMI_API_KEY"] = process.env["MOONSHOT_API_KEY"];
     }
 
     if (!args.project) {

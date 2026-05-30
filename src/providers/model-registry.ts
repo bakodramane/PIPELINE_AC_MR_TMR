@@ -63,7 +63,7 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     bestFor: "Complex analysis, structured JSON, reasoning-heavy tasks",
   },
   {
-    model: "kimi-k2.6-non-thinking",
+    model: "kimi-k2.6",
     provider: "kimi",
     displayName: "Kimi K2.6",
     tier: 2,

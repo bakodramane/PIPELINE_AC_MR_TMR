@@ -53,6 +53,11 @@ async function resolveApiKey(provider: Provider): Promise<string> {
     const envVar = envVarForProvider(provider);
     const key = process.env[envVar];
     if (key) return key;
+    // Kimi accepts both KIMI_API_KEY and MOONSHOT_API_KEY
+    if (provider === "kimi") {
+      const moonshot = process.env["MOONSHOT_API_KEY"];
+      if (moonshot) return moonshot;
+    }
   }
 
   throw new Error(
@@ -137,7 +142,7 @@ export async function generate(
 
 const TEST_MODELS: Record<Provider, Model> = {
   deepseek:  "deepseek-v4-flash",
-  kimi:      "kimi-k2.6-non-thinking",
+  kimi:      "kimi-k2.6",
   google:    "gemini-2.0-flash",
   openai:    "gpt-4o-mini",
   anthropic: "claude-opus-4-7",

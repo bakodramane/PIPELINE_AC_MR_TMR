@@ -1,8 +1,8 @@
 @echo off
-title AgCensus Compiler
+title Ag Census MR TMR Compiler
 cd /d "%~dp0"
 echo ========================================
-echo   AgCensus Compiler - FAO WCA 2020
+echo   Ag Census MR TMR Compiler - FAO WCA 2020
 echo ========================================
 echo.
 echo Starting application...

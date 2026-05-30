@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AgCensus Compiler",
+  "productName": "Ag Census MR TMR Compiler",
   "version": "0.1.0",
   "identifier": "org.fao.agcensus.compiler",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AgCensus Compiler",
+        "title": "Ag Census MR TMR Compiler",
         "width": 1280,
         "height": 800,
         "minWidth": 960,

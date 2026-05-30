@@ -38,21 +38,19 @@ export async function callKimi(
     { role: "user", content: options.userPrompt },
   ];
 
-  // Moonshot K2.6 requires temperature exactly 1.0 for all variants.
-  const temperature = options.temperature ?? 1.0;
-
-  // chat_template_kwargs is a Moonshot-specific extension not in the OpenAI
-  // type definitions. The SDK serialises the full body to JSON, so it is
-  // passed through as-is at runtime.
+  // Non-thinking mode: disable thinking via extra_body (same pattern as DeepSeek Flash).
+  // Thinking mode: omit extra_body — thinking is on by default.
   const baseParams = {
     model: KIMI_MODEL,
     messages,
-    temperature,
+    ...(options.temperature !== undefined && { temperature: options.temperature }),
     ...(options.maxTokens !== undefined && { max_tokens: options.maxTokens }),
     ...(options.responseFormat === "json" && {
       response_format: { type: "json_object" as const },
     }),
-    chat_template_kwargs: { thinking: isThinking },
+    ...(!isThinking && {
+      extra_body: { thinking: { type: "disabled" } },
+    }),
   } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming;
 
   if (options.onStream) {

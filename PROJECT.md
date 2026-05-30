@@ -1101,3 +1101,52 @@ tests + Vite transform of ProjectOverview.tsx instead.
 NOTE for live Mongolia test: the numeric-density change (Fix 3 Change 1) is what
 should make number-bearing sub-tables populate even with Cyrillic surrounding text;
 the empty-fallback (Change 2) only triggers when zero pages pass the ≥100-char filter.
+
+
+## Session 21 — Pilot fixes: rename, source delete, Kimi fix, DOCX export
+
+Four fixes from pilot feedback.
+
+**Fix 1 — App renamed to "Ag Census MR TMR Compiler":**
+- `src-tauri/tauri.conf.json`: `productName` and window `title`
+- `src/screens/ProjectList.tsx`: header `<div>` text
+- `launch-agcensus.bat`: `title` line and `echo` banner
+- `PILOT-SETUP.md`: all references
+- `src/screens/Settings.tsx`: About section
+
+**Fix 2 — Delete indexed source documents:**
+- `src/screens/ProjectOverview.tsx`: `SourceRow` gets a hover-reveal SVG trash
+  button using Tailwind `group`/`group-hover:opacity-100`; `SourcesTab` gains
+  `deleteTarget` + `deleting` state and a `handleDeleteConfirmed()` function that
+  invokes `delete_source`; full-screen confirmation overlay with Cancel + Delete.
+- `src-tauri/src/lib.rs`: `delete_source(project_dir, doc_id)` — removes
+  `evidence/pages/<id>-*.json`, `evidence/tables/<id>-*.json`, the physical file
+  from `sources/`, and prunes `_index.json`, `_evidence.json`, `manifest.json`.
+  Registered in `generate_handler!`.
+
+**Fix 3 — Kimi K2.6 API:**
+- `src/providers/kimi.ts`: removed `temperature: 1.0` default; replaced
+  `chat_template_kwargs: { thinking: bool }` with conditional
+  `extra_body: { thinking: { type: "disabled" } }` for non-thinking mode.
+- `src/providers/types.ts`: `"kimi-k2.6-non-thinking"` → `"kimi-k2.6"`.
+- `src/providers/pricing.json`: key renamed to `"kimi-k2.6"`.
+- `src/providers/model-registry.ts`: model string + displayName updated.
+- `src/providers/index.ts`: `TEST_MODELS.kimi` → `"kimi-k2.6"`; `resolveApiKey`
+  also checks `MOONSHOT_API_KEY` as fallback for `kimi` provider.
+- `src-tauri/scripts/generate.ts`: Model type updated; MOONSHOT_API_KEY aliased
+  to KIMI_API_KEY after `.env` load.
+- `src/screens/Settings.tsx`: Kimi `envVar` updated to
+  `"MOONSHOT_API_KEY or KIMI_API_KEY"`, `displayName` → `"Moonshot / Kimi API key"`.
+
+**Fix 4 — Export MR as .docx:**
+- `npm install docx` added to `package.json`.
+- `src/generators/export-mr-docx.ts` NEW: builds Word doc with title (28pt bold),
+  subtitle (14pt), Metadata Review heading, compiled-by line, HR, then sections
+  1–15 each as a Heading 1 (FAO green `#1B4F23`), claim paragraphs, grey source
+  lines, HR separator. Footer with page numbers. Writes to
+  `exports/<iso3>-mr-<date>.docx`.
+- `src-tauri/scripts/export.mjs`: added `mr-docx` branch calling `exportMrDocx`.
+- `src/screens/MrReview.tsx`: "Export MD" button is now two side-by-side buttons
+  ("Export MD" + "Export DOCX"), each with its own `exporting` state.
+
+**Verification:** `npx tsc --noEmit` → zero errors.

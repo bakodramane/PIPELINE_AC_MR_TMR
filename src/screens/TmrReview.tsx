@@ -17,7 +17,7 @@
  */
 
 import { useState, useEffect, useCallback, type FC } from "react";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -30,6 +30,33 @@ import type {
 import wcaData from "../concepts/wca-2020.json";
 import { MODELS_BY_TIER, DEFAULT_TMR_MODEL, getModelInfo } from "../providers/model-registry";
 import type { Model } from "../providers/types";
+
+// ---------------------------------------------------------------------------
+// Path helper
+// ---------------------------------------------------------------------------
+
+function joinPath(...parts: string[]): string {
+  return parts.map((p) => p.replace(/[/\\]+$/, "")).join("/");
+}
+
+// ---------------------------------------------------------------------------
+// Timestamp formatter — "DD Mon YYYY, HH:MM" in local time
+// ---------------------------------------------------------------------------
+
+const MONTH_NAMES = [
+  "Jan","Feb","Mar","Apr","May","Jun",
+  "Jul","Aug","Sep","Oct","Nov","Dec",
+];
+
+function formatLastRun(isoStr: string): string {
+  const d = new Date(isoStr);
+  const dd   = String(d.getDate()).padStart(2, "0");
+  const mon  = MONTH_NAMES[d.getMonth()] ?? "???";
+  const yyyy = d.getFullYear();
+  const hh   = String(d.getHours()).padStart(2, "0");
+  const mm   = String(d.getMinutes()).padStart(2, "0");
+  return `${dd} ${mon} ${yyyy}, ${hh}:${mm}`;
+}
 
 // ---------------------------------------------------------------------------
 // WCA 2020 type helpers
@@ -586,6 +613,8 @@ const TmrReview: FC<TmrReviewProps> = ({
     total: number;
   } | null>(null);
   const [exporting, setExporting] = useState(false);
+  // ISO 8601 timestamp of the most recent TMR generation run, or "" if none
+  const [lastRunAt, setLastRunAt] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<Model>(
     () =>
       (localStorage.getItem("agcensus_tmr_model") as Model | null) ??
@@ -617,6 +646,57 @@ const TmrReview: FC<TmrReviewProps> = ({
     return () => {
       cancelled = true;
     };
+  }, [projectDir]);
+
+  // ── Load last TMR run timestamp from audit JSONL files ──────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLastRun() {
+      try {
+        const auditDir = joinPath(projectDir, "audit");
+        const entries  = await readDir(auditDir);
+        const jsonlFiles = entries.filter(
+          (e) => !e.isDirectory && e.name.endsWith(".jsonl"),
+        );
+
+        let latestTimestamp = "";
+        for (const file of jsonlFiles) {
+          const content = await readTextFile(joinPath(auditDir, file.name));
+          for (const line of content.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const event = JSON.parse(trimmed) as {
+                type?: string;
+                target?: string;
+                timestamp?: string;
+              };
+              if (
+                event.type === "generation_completed" &&
+                event.target === "tmr" &&
+                typeof event.timestamp === "string"
+              ) {
+                if (!latestTimestamp || event.timestamp > latestTimestamp) {
+                  latestTimestamp = event.timestamp;
+                }
+              }
+            } catch {
+              // skip malformed JSONL lines
+            }
+          }
+        }
+
+        if (!cancelled) setLastRunAt(latestTimestamp);
+      } catch {
+        // audit directory may not exist yet on first use
+        if (!cancelled) setLastRunAt("");
+      }
+    }
+
+    void loadLastRun();
+    return () => { cancelled = true; };
   }, [projectDir]);
 
   // ── Reload a single sub-table from disk after generation ─────────────────
@@ -778,6 +858,15 @@ const TmrReview: FC<TmrReviewProps> = ({
             <div className="text-[10px] text-green-200">
               Tables of Main Results
             </div>
+            {lastRunAt ? (
+              <div className="text-[10px] text-green-300 mt-0.5">
+                Last run: {formatLastRun(lastRunAt)}
+              </div>
+            ) : (
+              <div className="text-[10px] text-green-500/50 mt-0.5">
+                Last run: never
+              </div>
+            )}
           </div>
           {/* Export XLSX — outline style to distinguish from the generate button */}
           <button

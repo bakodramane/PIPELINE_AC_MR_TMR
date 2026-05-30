@@ -638,6 +638,83 @@ async fn ingest_source(
 }
 
 // ---------------------------------------------------------------------------
+// API connection test command
+// ---------------------------------------------------------------------------
+
+/// Test an API key by making a minimal real call via the Node.js sidecar.
+///
+/// Returns the round-trip latency in milliseconds as a string on success,
+/// or a descriptive error message on failure.  Routing through the sidecar
+/// avoids browser CORS restrictions that block direct calls from the webview.
+#[tauri::command]
+async fn test_api_connection_cmd(
+    app: tauri::AppHandle,
+    provider: String,
+    api_key: String,
+) -> Result<String, String> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
+    let root = manifest
+        .parent()
+        .expect("src-tauri must have a parent directory")
+        .to_path_buf(); // …/PIPELINE
+
+    let tsx_cli = root
+        .join("node_modules")
+        .join("tsx")
+        .join("dist")
+        .join("cli.mjs");
+    let script = manifest.join("scripts").join("test-connection.mjs");
+
+    let args = vec![
+        tsx_cli.to_string_lossy().into_owned(),
+        script.to_string_lossy().into_owned(),
+        "--provider".to_string(),
+        provider,
+        "--api-key".to_string(),
+        api_key,
+    ];
+
+    let (mut rx, _child) = app
+        .shell()
+        .command("node")
+        .args(&args)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn test-connection: {e}"))?;
+
+    let mut buf = String::new();
+    let mut output_val = String::new();
+    let mut error_msg  = String::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim_end_matches('\r').to_string();
+                    buf = buf[pos + 1..].to_string();
+                    if let Some(rest) = line.strip_prefix("DONE:") {
+                        output_val = rest.trim().to_string();
+                    } else if let Some(rest) = line.strip_prefix("ERROR:") {
+                        error_msg = rest.trim().to_string();
+                    }
+                }
+            }
+            CommandEvent::Stderr(_) => {}
+            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            _ => {}
+        }
+    }
+
+    if !error_msg.is_empty() {
+        Err(error_msg)
+    } else if !output_val.is_empty() {
+        Ok(output_val)
+    } else {
+        Err("Connection test completed with no output".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Create project command
 // ---------------------------------------------------------------------------
 
@@ -684,6 +761,124 @@ fn create_project(project_dir: String, manifest: String) -> Result<String, Strin
 }
 
 // ---------------------------------------------------------------------------
+// Delete source command
+// ---------------------------------------------------------------------------
+
+/// Delete one indexed source document and all its derived evidence.
+///
+/// Removes:
+///   - evidence/pages/<doc_id>-*.json
+///   - evidence/tables/<doc_id>-*.json
+///   - sources/<doc_id>-* (the physical file)
+///   - the entry from sources/_index.json
+///   - all page/table entries from evidence/_evidence.json where source_doc == doc_id
+///   - the entry from manifest.json source_documents where id == doc_id
+#[tauri::command]
+fn delete_source(project_dir: String, doc_id: String) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let base = Path::new(&project_dir);
+
+    // Helper: delete files in a directory whose names start with "<doc_id>-"
+    fn delete_prefixed(dir: &Path, prefix: &str) -> Result<(), String> {
+        if !dir.exists() { return Ok(()); }
+        let entries = fs::read_dir(dir)
+            .map_err(|e| format!("Failed to read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(prefix) && name.ends_with(".json") {
+                fs::remove_file(entry.path())
+                    .map_err(|e| format!("Failed to remove {}: {e}", entry.path().display()))?;
+            }
+        }
+        Ok(())
+    }
+
+    let prefix = format!("{doc_id}-");
+
+    delete_prefixed(&base.join("evidence").join("pages"), &prefix)?;
+    delete_prefixed(&base.join("evidence").join("tables"), &prefix)?;
+
+    // Delete the physical source file (may have any extension after the prefix)
+    let sources_dir = base.join("sources");
+    if sources_dir.exists() {
+        let entries = fs::read_dir(&sources_dir)
+            .map_err(|e| format!("Failed to read sources dir: {e}"))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name != "_index.json" && name.starts_with(&prefix) {
+                fs::remove_file(entry.path())
+                    .map_err(|e| format!("Failed to remove source file: {e}"))?;
+            }
+        }
+    }
+
+    // Update sources/_index.json
+    let index_path = sources_dir.join("_index.json");
+    if index_path.exists() {
+        let raw = fs::read_to_string(&index_path)
+            .map_err(|e| format!("Failed to read _index.json: {e}"))?;
+        let mut index: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("Failed to parse _index.json: {e}"))?;
+        if let Some(arr) = index.as_array_mut() {
+            arr.retain(|entry| {
+                entry.get("id").and_then(|v| v.as_str()) != Some(doc_id.as_str())
+            });
+        }
+        let updated = serde_json::to_string_pretty(&index)
+            .map_err(|e| format!("Failed to serialize _index.json: {e}"))?;
+        fs::write(&index_path, updated.as_bytes())
+            .map_err(|e| format!("Failed to write _index.json: {e}"))?;
+    }
+
+    // Update evidence/_evidence.json
+    let evidence_path = base.join("evidence").join("_evidence.json");
+    if evidence_path.exists() {
+        let raw = fs::read_to_string(&evidence_path)
+            .map_err(|e| format!("Failed to read _evidence.json: {e}"))?;
+        let mut evidence: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("Failed to parse _evidence.json: {e}"))?;
+        if let Some(obj) = evidence.as_object_mut() {
+            for key in &["pages", "tables"] {
+                if let Some(arr) = obj.get_mut(*key).and_then(|v| v.as_array_mut()) {
+                    arr.retain(|entry| {
+                        entry.get("source_doc").and_then(|v| v.as_str()) != Some(doc_id.as_str())
+                    });
+                }
+            }
+        }
+        let updated = serde_json::to_string_pretty(&evidence)
+            .map_err(|e| format!("Failed to serialize _evidence.json: {e}"))?;
+        fs::write(&evidence_path, updated.as_bytes())
+            .map_err(|e| format!("Failed to write _evidence.json: {e}"))?;
+    }
+
+    // Update manifest.json
+    let manifest_path = base.join("manifest.json");
+    if manifest_path.exists() {
+        let raw = fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("Failed to read manifest.json: {e}"))?;
+        let mut manifest: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("Failed to parse manifest.json: {e}"))?;
+        if let Some(docs) = manifest
+            .get_mut("source_documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            docs.retain(|entry| {
+                entry.get("id").and_then(|v| v.as_str()) != Some(doc_id.as_str())
+            });
+        }
+        let updated = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| format!("Failed to serialize manifest.json: {e}"))?;
+        fs::write(&manifest_path, updated.as_bytes())
+            .map_err(|e| format!("Failed to write manifest.json: {e}"))?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
@@ -706,6 +901,8 @@ pub fn run() {
             get_api_key,
             copy_source_file,
             ingest_source,
+            delete_source,
+            test_api_connection_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");

@@ -235,10 +235,16 @@ interface QueuedFile {
 // Source row
 // ---------------------------------------------------------------------------
 
-function SourceRow({ entry }: { entry: SourceIndexEntry }) {
+function SourceRow({
+  entry,
+  onDelete,
+}: {
+  entry: SourceIndexEntry;
+  onDelete: (id: string, filename: string) => void;
+}) {
   const hasPages = (entry.page_count ?? 0) > 0;
   return (
-    <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-3 py-2.5">
+    <div className="group flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-3 py-2.5">
       <span className="text-base shrink-0">📄</span>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-gray-800 truncate">
@@ -262,6 +268,30 @@ function SourceRow({ entry }: { entry: SourceIndexEntry }) {
       >
         {hasPages ? "Indexed ✓" : "⚠ Low confidence"}
       </span>
+      {/* Trash icon — visible only on row hover */}
+      <button
+        onClick={() => onDelete(entry.id, entry.filename)}
+        title="Delete source"
+        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-600 p-1 rounded"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6l-1 14H6L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+          <path d="M9 6V4h6v2" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -289,6 +319,9 @@ function SourcesTab({
   const [indexing, setIndexing] = useState(false);
   const [indexProgress, setIndexProgress] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
+  // Delete confirmation state
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Ref so the drag-drop event listener always sees current sources count
   const sourcesLengthRef = useRef(0);
@@ -525,6 +558,26 @@ function SourcesTab({
     }
   }
 
+  // ── Delete a source ───────────────────────────────────────────────────────
+
+  async function handleDeleteConfirmed() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      await invoke("delete_source", {
+        projectDir,
+        docId: deleteTarget.id,
+      });
+      setDeleteTarget(null);
+      await loadSources();
+      onToast("Source removed", "success");
+    } catch (err) {
+      onToast(`Delete failed: ${String(err)}`, "error");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   const current =
@@ -545,7 +598,11 @@ function SourcesTab({
             Indexed sources ({sources.length})
           </div>
           {sources.map((entry) => (
-            <SourceRow key={entry.id} entry={entry} />
+            <SourceRow
+              key={entry.id}
+              entry={entry}
+              onDelete={(id, filename) => setDeleteTarget({ id, filename })}
+            />
           ))}
         </div>
       ) : (
@@ -658,6 +715,44 @@ function SourcesTab({
         <div className="border border-gray-200 rounded-xl p-4 bg-gray-50 flex items-center gap-3">
           <div className="w-4 h-4 border-2 border-[#1B4F23] border-t-transparent rounded-full animate-spin shrink-0" />
           <div className="text-sm text-gray-600">{indexProgress}</div>
+        </div>
+      )}
+
+      {/* Delete confirmation overlay */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Delete {deleteTarget.filename}?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This will remove the file and all its indexed evidence. This
+              cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleDeleteConfirmed()}
+                disabled={deleting}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {deleting ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  "Delete"
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
