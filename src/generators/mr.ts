@@ -237,14 +237,24 @@ async function writeJson(filePath: string, data: unknown): Promise<void> {
 }
 
 /**
- * Strip markdown code fences that some models add even when instructed not to.
- * Handles ```json\n...\n``` and ```\n...\n``` variants.
+ * Robust JSON extraction.
+ *
+ * Step 1: strip markdown fences (handles ```json ... ``` and ``` ... ``` variants).
+ * Step 2: find the outermost { } pair, discarding any preamble text or
+ *         partial thinking content that Kimi K2.6 sometimes emits before the JSON.
+ *
+ * Returns the extracted JSON string, or null if no valid { } pair was found.
  */
-function stripFences(raw: string): string {
-  return raw
-    .replace(/^```(?:json)?\s*\n?/m, "")
-    .replace(/\n?\s*```\s*$/m, "")
-    .trim();
+function extractJson(text: string): string | null {
+  // Step 1: strip markdown fences
+  let s = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+
+  // Step 2: find the outermost { } pair
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  return s.slice(start, end + 1);
 }
 
 /**
@@ -409,12 +419,15 @@ export async function generateSection(
   const wasTruncated = result.finishReason === 'length';
 
   // ── 4. Parse the response ────────────────────────────────────────────────
-  const stripped = stripFences(result.text);
+  // Use extractJson to tolerate preamble text or partial thinking content
+  // that some models (notably Kimi K2.6) emit before the JSON object.
+  const extracted = extractJson(result.text);
   let parsed: ModelClaimsResponse | null = null;
   let parseFailed = false;
 
   try {
-    parsed = JSON.parse(stripped) as ModelClaimsResponse;
+    if (!extracted) throw new Error("No JSON object found in response");
+    parsed = JSON.parse(extracted) as ModelClaimsResponse;
     if (!Array.isArray(parsed?.claims)) {
       throw new Error("Response JSON missing 'claims' array");
     }

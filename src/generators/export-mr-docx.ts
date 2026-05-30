@@ -167,7 +167,9 @@ export async function exportMrDocx(projectDir: string, clean = false): Promise<s
             spacing: { after: 80 },
           }),
         );
-        if (claim.sources.length > 0) {
+        // Source citations are internal references — omit them in the clean
+        // (external distribution) version.  Draft mode keeps them for review.
+        if (!clean && claim.sources.length > 0) {
           const sourceText = claim.sources.map((s) => s.page_id).join(", ");
           children.push(
             new Paragraph({

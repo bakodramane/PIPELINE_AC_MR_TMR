@@ -93,9 +93,13 @@ export async function exportMr(projectDir: string, clean = false): Promise<strin
     } else {
       for (const claim of sectionData.claims) {
         md += `${claim.text}\n`;
-        for (const src of claim.sources) {
-          const pageNum = extractPageNum(src.page_id);
-          md += `> Source: ${src.page_id}, p.${pageNum}\n`;
+        // Source citations are internal references — omit them in the clean
+        // (external distribution) version.  Draft mode keeps them for review.
+        if (!clean) {
+          for (const src of claim.sources) {
+            const pageNum = extractPageNum(src.page_id);
+            md += `> Source: ${src.page_id}, p.${pageNum}\n`;
+          }
         }
         md += `\n`;
       }

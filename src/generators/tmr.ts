@@ -383,13 +383,24 @@ async function writeJson(filePath: string, data: unknown): Promise<void> {
 }
 
 /**
- * Strip markdown code fences that some models add even when instructed not to.
+ * Robust JSON extraction.
+ *
+ * Step 1: strip markdown fences (handles ```json ... ``` and ``` ... ``` variants).
+ * Step 2: find the outermost { } pair, discarding any preamble text or
+ *         partial thinking content that Kimi K2.6 sometimes emits before the JSON.
+ *
+ * Returns the extracted JSON string, or null if no valid { } pair was found.
  */
-function stripFences(raw: string): string {
-  return raw
-    .replace(/^```(?:json)?\s*\n?/m, "")
-    .replace(/\n?\s*```\s*$/m, "")
-    .trim();
+function extractJson(text: string): string | null {
+  // Step 1: strip markdown fences
+  let s = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+
+  // Step 2: find the outermost { } pair
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  return s.slice(start, end + 1);
 }
 
 /**
@@ -852,11 +863,18 @@ export async function generateSubTable(
     );
 
     const wallStart = Date.now();
+    // Per-model max-token safety check: Kimi K2.6 tends to be more verbose,
+    // so multiply the budget by 1.5 to reduce truncation failures. Cap at 4096.
+    const baseMaxTokens = SUB_TABLE_MAX_TOKENS[subTableNumber] ?? MAX_TOKENS;
+    const effectiveMaxTokens =
+      model === "kimi-k2.6" || model === "kimi-k2.6-thinking"
+        ? Math.min(Math.round(baseMaxTokens * 1.5), 4096)
+        : baseMaxTokens;
     const result = await generate({
       systemPrompt,
       userPrompt,
       model,
-      maxTokens: SUB_TABLE_MAX_TOKENS[subTableNumber] ?? MAX_TOKENS,
+      maxTokens: effectiveMaxTokens,
       // temperature=0 for data extraction: deterministic responses reduce the
       // risk of the model hallucinating or omitting values across runs.
       temperature: 0,
@@ -869,11 +887,13 @@ export async function generateSubTable(
     lastProvider = result.provider;
     if (result.finishReason === 'length') anyTruncated = true;
 
-    // Parse response
-    const stripped = stripFences(result.text);
+    // Parse response — use extractJson to tolerate preamble text or partial
+    // thinking content that some models (notably Kimi K2.6) emit before the JSON.
+    const extracted = extractJson(result.text);
     let parsed: ModelSubTableResponse | null = null;
     try {
-      parsed = JSON.parse(stripped) as ModelSubTableResponse;
+      if (!extracted) throw new Error("No JSON object found in response");
+      parsed = JSON.parse(extracted) as ModelSubTableResponse;
       if (!parsed.cells || typeof parsed.cells !== "object") {
         throw new Error("Response JSON missing 'cells' object");
       }
