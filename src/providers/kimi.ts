@@ -38,8 +38,14 @@ export async function callKimi(
     { role: "user", content: options.userPrompt },
   ];
 
-  // Non-thinking mode: disable thinking via extra_body (same pattern as DeepSeek Flash).
-  // Thinking mode: omit extra_body — thinking is on by default.
+  // Disable thinking when:
+  //   a) The non-thinking model variant is selected (always), or
+  //   b) The caller explicitly opts out (disableThinking: true), e.g. TMR data
+  //      extraction where reasoning traces consume token budget without gain.
+  // The thinking variant retains thinking by default — MR narrative generation
+  // benefits from it and does NOT pass disableThinking.
+  const shouldDisableThinking = !isThinking || options.disableThinking === true;
+
   const baseParams = {
     model: KIMI_MODEL,
     messages,
@@ -49,7 +55,7 @@ export async function callKimi(
     ...(options.responseFormat === "json" && {
       response_format: { type: "json_object" as const },
     }),
-    ...(!isThinking && {
+    ...(shouldDisableThinking && {
       extra_body: { thinking: { type: "disabled" } },
     }),
   } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming;

@@ -240,8 +240,10 @@ async function writeJson(filePath: string, data: unknown): Promise<void> {
  * Robust JSON extraction.
  *
  * Step 1: strip markdown fences (handles ```json ... ``` and ``` ... ``` variants).
- * Step 2: find the outermost { } pair, discarding any preamble text or
- *         partial thinking content that Kimi K2.6 sometimes emits before the JSON.
+ * Step 2: strip thinking-model tag blocks that some Kimi K2.6 deployments emit
+ *         inside the content field even when thinking is "disabled":
+ *           <think>…</think>  <thinking>…</thinking>  <reasoning>…</reasoning>
+ * Step 3: find the outermost { } pair, discarding any remaining preamble text.
  *
  * Returns the extracted JSON string, or null if no valid { } pair was found.
  */
@@ -249,7 +251,13 @@ function extractJson(text: string): string | null {
   // Step 1: strip markdown fences
   let s = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
 
-  // Step 2: find the outermost { } pair
+  // Step 2: strip thinking/reasoning tag blocks
+  // Use non-greedy match so nested content is handled correctly.
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  s = s.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+  s = s.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '').trim();
+
+  // Step 3: find the outermost { } pair
   const start = s.indexOf('{');
   const end = s.lastIndexOf('}');
   if (start === -1 || end === -1 || end <= start) return null;
