@@ -42,21 +42,37 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Prompt version baked into every audit event and history file name. */
 const PROMPT_VERSION = "v1.3";
 
+// ---------------------------------------------------------------------------
+// Production-mode resource root (set by Rust backend when running bundles).
+// In dev mode the env var is absent and __dirname-relative paths are used.
+// ---------------------------------------------------------------------------
+
+/**
+ * AGCENSUS_RESOURCE_ROOT points to the dist-scripts/ directory that was
+ * bundled as a Tauri resource.  It contains:
+ *   references/mr-prompt-v1.3.md
+ *   mr-prompts/section-*.md
+ *   concepts/wca-2020.json
+ */
+const RESOURCE_ROOT = process.env["AGCENSUS_RESOURCE_ROOT"] ?? null;
+
 /**
  * Path to the MR system prompt.
- * Resolved as: <src/generators/../../references/mr-prompt-v1.3.md>
- *              = <worktree-root>/references/mr-prompt-v1.3.md
+ * Dev:  <src/generators/../../references/mr-prompt-v1.3.md>
+ * Prod: <RESOURCE_ROOT>/references/mr-prompt-v1.3.md
  */
-const MR_SYSTEM_PROMPT_PATH = path.resolve(
-  __dirname,
-  "..",
-  "..",
-  "references",
-  "mr-prompt-v1.3.md",
-);
+const MR_SYSTEM_PROMPT_PATH = RESOURCE_ROOT
+  ? path.join(RESOURCE_ROOT, "references", "mr-prompt-v1.3.md")
+  : path.resolve(__dirname, "..", "..", "references", "mr-prompt-v1.3.md");
 
-/** Directory that contains per-section instruction files. */
-const SECTION_PROMPTS_DIR = path.resolve(__dirname, "mr-prompts");
+/**
+ * Directory that contains per-section instruction files.
+ * Dev:  <src/generators/mr-prompts/>
+ * Prod: <RESOURCE_ROOT>/mr-prompts/
+ */
+const SECTION_PROMPTS_DIR = RESOURCE_ROOT
+  ? path.join(RESOURCE_ROOT, "mr-prompts")
+  : path.resolve(__dirname, "mr-prompts");
 
 // ---------------------------------------------------------------------------
 // Section metadata

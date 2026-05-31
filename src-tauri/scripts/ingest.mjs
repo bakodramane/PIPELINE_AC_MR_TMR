@@ -16,20 +16,10 @@
  */
 
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-
-// ---------------------------------------------------------------------------
-// Path constants
-// ---------------------------------------------------------------------------
-
-// This file lives at <PIPELINE>/src-tauri/scripts/ingest.mjs
-// __dirname  = <PIPELINE>/src-tauri/scripts
-// PIPELINE_ROOT = <PIPELINE>
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-const PIPELINE_ROOT = path.resolve(__dirname, "..", "..");
+// Static import — resolved at bundle time by esbuild; no tsx needed at runtime.
+import { ingestPdf, ingestExcel } from "../../src/ingest/pipeline.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,18 +56,6 @@ async function main() {
 
     if (!args.project || !args.docId || !args.file) {
       writeLine("ERROR:Missing required arguments: --project, --doc-id, --file");
-      return;
-    }
-
-    // Dynamic import via tsx module loader â€” resolves .ts extensions
-    let ingestPdf;
-    let ingestExcel;
-    try {
-      const mod = await import(pathToFileURL(path.join(PIPELINE_ROOT, "src/ingest/pipeline.ts")).href);
-      ingestPdf = mod.ingestPdf;
-      ingestExcel = mod.ingestExcel;
-    } catch (err) {
-      writeLine(`ERROR:Cannot load ingest pipeline: ${sanitise(String(err))}`);
       return;
     }
 

@@ -64,17 +64,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Prompt version baked into every audit event. */
 const PROMPT_VERSION = "v1.3";
 
+// Production-mode resource root (see mr.ts for details)
+const RESOURCE_ROOT = process.env["AGCENSUS_RESOURCE_ROOT"] ?? null;
+
 /**
  * Path to the WCA 2020 concept registry.
- * Resolved as: <src/generators/../concepts/wca-2020.json>
- *            = <project-root>/src/concepts/wca-2020.json
+ * Dev:  <src/generators/../concepts/wca-2020.json> = <project-root>/src/concepts/wca-2020.json
+ * Prod: <RESOURCE_ROOT>/concepts/wca-2020.json
  */
-const WCA_CONCEPTS_PATH = path.resolve(
-  __dirname,
-  "..",
-  "concepts",
-  "wca-2020.json",
-);
+const WCA_CONCEPTS_PATH = RESOURCE_ROOT
+  ? path.join(RESOURCE_ROOT, "concepts", "wca-2020.json")
+  : path.resolve(__dirname, "..", "concepts", "wca-2020.json");
 
 /** Acres to hectares conversion factor (exact). */
 const ACRES_TO_HA = 0.4047;

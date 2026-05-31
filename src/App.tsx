@@ -19,6 +19,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import ProjectList from "./screens/ProjectList";
 import ProjectOverview from "./screens/ProjectOverview";
 import MrReview from "./screens/MrReview";
@@ -119,11 +120,62 @@ function ToastContainer({
 // App
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Node.js missing screen
+// ---------------------------------------------------------------------------
+
+function NodeMissingScreen({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+      <div className="max-w-md w-full bg-white rounded-xl border border-red-200 shadow-lg p-8 text-center">
+        <div className="text-4xl mb-4">⚠️</div>
+        <h1 className="text-xl font-semibold text-gray-900 mb-3">
+          Node.js is required
+        </h1>
+        <p className="text-sm text-gray-600 mb-6 leading-relaxed">
+          Node.js was not found on your system. Generation and ingest features
+          require Node.js to be installed.
+          <br /><br />
+          Please install the LTS version from{" "}
+          <strong>nodejs.org</strong>, then restart this application.
+        </p>
+        <div className="flex gap-3 justify-center">
+          <button
+            onClick={() => {
+              void (async () => {
+                try {
+                  await invoke("open_path", { path: "https://nodejs.org" });
+                } catch {
+                  window.open("https://nodejs.org", "_blank");
+                }
+              })();
+            }}
+            className="px-4 py-2 text-sm font-medium bg-[#1B4F23] text-white rounded-lg hover:bg-[#163d1c] transition-colors"
+          >
+            Open nodejs.org
+          </button>
+          <button
+            onClick={onRetry}
+            className="px-4 py-2 text-sm font-medium border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
+
 let _nextToastId = 0;
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>({ id: "list" });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [nodeOk, setNodeOk] = useState<boolean | null>(null); // null = checking
   // Track where to return after closing Settings
   const [prevScreen, setPrevScreen] = useState<NonSettingsScreen>({
     id: "list",
@@ -145,6 +197,18 @@ export default function App() {
     },
     [],
   );
+
+  // Check Node.js availability on startup (and on retry)
+  const checkNode = useCallback(() => {
+    setNodeOk(null);
+    void invoke<string>("check_node_available")
+      .then(() => setNodeOk(true))
+      .catch(() => setNodeOk(false));
+  }, []);
+
+  useEffect(() => {
+    checkNode();
+  }, [checkNode]);
 
   // Reset scroll to top on screen change
   useEffect(() => {
@@ -242,6 +306,18 @@ export default function App() {
           />
         );
     }
+  }
+
+  // Show spinner while checking, error screen if Node missing
+  if (nodeOk === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-gray-200 border-t-[#1B4F23] rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (nodeOk === false) {
+    return <NodeMissingScreen onRetry={checkNode} />;
   }
 
   return (

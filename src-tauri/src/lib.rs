@@ -6,9 +6,13 @@
 /// Session 18: adds save_api_key / get_api_key commands (tauri-plugin-store),
 /// passes --provider / --api-key args to generator child process, and
 /// registers tauri-plugin-store in the Tauri builder.
+///
+/// Session 24 (installer): adds production-mode path resolution so the app
+/// can run pre-compiled ESM bundles from the Tauri resource directory instead
+/// of relying on tsx + source files that are absent after installation.
 
-use std::path::PathBuf;
-use tauri::Emitter;
+use std::path::{Path, PathBuf};
+use tauri::{Emitter, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_store::StoreExt;
@@ -63,6 +67,116 @@ fn generator_paths() -> (PathBuf, PathBuf) {
         .join("cli.mjs");
     let script = manifest.join("scripts").join("generate.ts");
     (tsx_cli, script)
+}
+
+// ---------------------------------------------------------------------------
+// Production-mode path helpers
+// ---------------------------------------------------------------------------
+
+/// Find the pre-compiled ESM bundle directory (production mode).
+///
+/// Checks the Tauri resource directory for `dist-scripts/generate.mjs`.
+/// Returns `Some(dir)` when running from an installed bundle, `None` in dev.
+fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    // Primary: Tauri resource_dir (installer bundles resources here)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let marker = resource_dir.join("dist-scripts").join("generate.mjs");
+        if marker.exists() {
+            return Some(resource_dir.join("dist-scripts"));
+        }
+    }
+
+    // Fallback: directory next to the executable (portable layout)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let marker = exe_dir.join("dist-scripts").join("generate.mjs");
+            if marker.exists() {
+                return Some(exe_dir.join("dist-scripts").to_path_buf());
+            }
+        }
+    }
+
+    None // Dev mode — caller falls back to tsx invocation
+}
+
+/// Locate the Node.js binary on the current machine.
+///
+/// Checks well-known Windows install locations, then falls back to PATH.
+/// Returns the full path on success, or `None` if Node is not found.
+fn find_node_binary() -> Option<PathBuf> {
+    // Well-known Windows install locations
+    let candidates: Vec<PathBuf> = [
+        std::env::var("ProgramFiles").ok()
+            .map(|p| PathBuf::from(&p).join("nodejs").join("node.exe")),
+        std::env::var("LOCALAPPDATA").ok()
+            .map(|p| PathBuf::from(&p).join("Programs").join("nodejs").join("node.exe")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for path in candidates {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Try PATH via `where node` (Windows) / `which node` (Unix)
+    #[cfg(target_os = "windows")]
+    let where_cmd = ("where", "node");
+    #[cfg(not(target_os = "windows"))]
+    let where_cmd = ("which", "node");
+
+    if let Ok(out) = std::process::Command::new(where_cmd.0)
+        .arg(where_cmd.1)
+        .output()
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = s.lines().next() {
+                let p = PathBuf::from(line.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolve how to invoke a sidecar script: production bundle or dev tsx.
+///
+/// Returns `(node_binary, leading_args)` where leading_args contains the
+/// bundle path (prod) or [tsx_cli, script_path] (dev).
+fn resolve_invocation(
+    app: &tauri::AppHandle,
+    script_name: &str,
+) -> Result<(String, Vec<String>), String> {
+    if let Some(scripts_dir) = find_node_scripts_dir(app) {
+        // Production: node dist-scripts/<stem>.mjs [args]
+        let stem = Path::new(script_name)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let bundle = scripts_dir.join(format!("{stem}.mjs"));
+        let node = find_node_binary()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "node".to_string());
+        Ok((node, vec![bundle.to_string_lossy().into_owned()]))
+    } else {
+        // Dev: node tsx_cli script_path [args]
+        let (tsx_cli, _) = generator_paths();
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let script   = manifest.join("scripts").join(script_name);
+        Ok((
+            "node".to_string(),
+            vec![
+                tsx_cli.to_string_lossy().into_owned(),
+                script.to_string_lossy().into_owned(),
+            ],
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,15 +243,19 @@ async fn generate_mr_sections(
     section: Option<u32>,
     model: String,
 ) -> Result<String, String> {
-    let (tsx_cli, script) = generator_paths();
+    let (node_cmd, mut args) = resolve_invocation(&app, "generate.ts")?;
+
+    // AGCENSUS_RESOURCE_ROOT is set in production so generator scripts can
+    // locate prompt templates and the WCA concept registry via env var
+    // instead of __dirname-relative paths (which change after bundling).
+    let resource_root: Option<String> = find_node_scripts_dir(&app)
+        .map(|d| d.to_string_lossy().into_owned());
 
     // Determine the provider and look up any stored API key
     let provider = provider_for_model(&model);
     let api_key  = read_api_key_from_store(&app, provider);
 
-    let mut args = vec![
-        tsx_cli.to_string_lossy().into_owned(),
-        script.to_string_lossy().into_owned(),
+    args.extend([
         "--project".to_string(),
         project_dir,
         "--type".to_string(),
@@ -146,7 +264,7 @@ async fn generate_mr_sections(
         model,
         "--provider".to_string(),
         provider.to_string(),
-    ];
+    ]);
 
     // Only pass --api-key when we actually have a stored key; otherwise the
     // Node script will fall back to process.env / the .env file.
@@ -162,10 +280,11 @@ async fn generate_mr_sections(
         15
     };
 
-    let (mut rx, _child) = app
-        .shell()
-        .command("node")
-        .args(&args)
+    let mut cmd = app.shell().command(&node_cmd).args(&args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    let (mut rx, _child) = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn node generator: {e}"))?;
 
@@ -241,14 +360,13 @@ async fn generate_tmr_subtable(
     sub_table_number: i32,
     model: String,
 ) -> Result<String, String> {
-    let (tsx_cli, script) = generator_paths();
+    let (node_cmd, mut args) = resolve_invocation(&app, "generate.ts")?;
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
 
     let provider = provider_for_model(&model);
     let api_key  = read_api_key_from_store(&app, provider);
 
-    let mut args = vec![
-        tsx_cli.to_string_lossy().into_owned(),
-        script.to_string_lossy().into_owned(),
+    args.extend([
         "--project".to_string(),
         project_dir,
         "--type".to_string(),
@@ -257,7 +375,7 @@ async fn generate_tmr_subtable(
         model,
         "--provider".to_string(),
         provider.to_string(),
-    ];
+    ]);
 
     if let Some(ref key) = api_key {
         args.extend(["--api-key".to_string(), key.clone()]);
@@ -274,10 +392,11 @@ async fn generate_tmr_subtable(
         1
     };
 
-    let (mut rx, _child) = app
-        .shell()
-        .command("node")
-        .args(&args)
+    let mut cmd = app.shell().command(&node_cmd).args(&args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    let (mut rx, _child) = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn node generator: {e}"))?;
 
@@ -348,31 +467,12 @@ async fn export_project(
     project_dir: String,
     export_type: String,
 ) -> Result<String, String> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
-    let root = manifest
-        .parent()
-        .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // …/PIPELINE
-
-    let tsx_cli = root
-        .join("node_modules")
-        .join("tsx")
-        .join("dist")
-        .join("cli.mjs");
-    let script = manifest.join("scripts").join("export.mjs");
-
-    let args = vec![
-        tsx_cli.to_string_lossy().into_owned(),
-        script.to_string_lossy().into_owned(),
-        "--project".to_string(),
-        project_dir,
-        "--type".to_string(),
-        export_type,
-    ];
+    let (node_cmd, mut args) = resolve_invocation(&app, "export.mjs")?;
+    args.extend(["--project".to_string(), project_dir, "--type".to_string(), export_type]);
 
     let (mut rx, _child) = app
         .shell()
-        .command("node")
+        .command(&node_cmd)
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to spawn export: {e}"))?;
@@ -551,8 +651,8 @@ fn copy_source_file(
 
 /// Run the ingest pipeline for one PDF source document.
 ///
-/// Spawns `node <tsx-cli.mjs> ingest.mjs --project ... --doc-id ... --file ... --language ...`
-/// and streams progress events ("ingest-progress") back to the frontend.
+/// Spawns the ingest sidecar and streams progress events ("ingest-progress")
+/// back to the frontend.
 #[tauri::command]
 async fn ingest_source(
     app: tauri::AppHandle,
@@ -561,35 +661,17 @@ async fn ingest_source(
     file_path: String,
     language: String,
 ) -> Result<(), String> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
-    let root = manifest_dir
-        .parent()
-        .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // …/PIPELINE
-
-    let tsx_cli = root
-        .join("node_modules")
-        .join("tsx")
-        .join("dist")
-        .join("cli.mjs");
-    let script = manifest_dir.join("scripts").join("ingest.mjs");
-
-    let args = vec![
-        tsx_cli.to_string_lossy().into_owned(),
-        script.to_string_lossy().into_owned(),
-        "--project".to_string(),
-        project_dir,
-        "--doc-id".to_string(),
-        doc_id.clone(),
-        "--file".to_string(),
-        file_path,
-        "--language".to_string(),
-        language,
-    ];
+    let (node_cmd, mut args) = resolve_invocation(&app, "ingest.mjs")?;
+    args.extend([
+        "--project".to_string(), project_dir,
+        "--doc-id".to_string(),  doc_id.clone(),
+        "--file".to_string(),    file_path,
+        "--language".to_string(), language,
+    ]);
 
     let (mut rx, _child) = app
         .shell()
-        .command("node")
+        .command(&node_cmd)
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to spawn ingest process: {e}"))?;
@@ -652,31 +734,12 @@ async fn test_api_connection_cmd(
     provider: String,
     api_key: String,
 ) -> Result<String, String> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // …/src-tauri
-    let root = manifest
-        .parent()
-        .expect("src-tauri must have a parent directory")
-        .to_path_buf(); // …/PIPELINE
-
-    let tsx_cli = root
-        .join("node_modules")
-        .join("tsx")
-        .join("dist")
-        .join("cli.mjs");
-    let script = manifest.join("scripts").join("test-connection.mjs");
-
-    let args = vec![
-        tsx_cli.to_string_lossy().into_owned(),
-        script.to_string_lossy().into_owned(),
-        "--provider".to_string(),
-        provider,
-        "--api-key".to_string(),
-        api_key,
-    ];
+    let (node_cmd, mut args) = resolve_invocation(&app, "test-connection.mjs")?;
+    args.extend(["--provider".to_string(), provider, "--api-key".to_string(), api_key]);
 
     let (mut rx, _child) = app
         .shell()
-        .command("node")
+        .command(&node_cmd)
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to spawn test-connection: {e}"))?;
@@ -712,6 +775,36 @@ async fn test_api_connection_cmd(
     } else {
         Err("Connection test completed with no output".to_string())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Node.js availability check
+// ---------------------------------------------------------------------------
+
+/// Verify Node.js is installed and return its version string.
+///
+/// Called on app startup to show a helpful error before the project list
+/// if Node is missing (generation and ingest both require Node at runtime).
+#[tauri::command]
+fn check_node_available() -> Result<String, String> {
+    std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .map_err(|_| {
+            "Node.js is not installed or not on PATH. \
+             Please install Node.js (LTS) from nodejs.org, then restart this application."
+                .to_string()
+        })
+        .and_then(|out| {
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            } else {
+                Err(format!(
+                    "node --version failed (exit {:?})",
+                    out.status.code()
+                ))
+            }
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -903,6 +996,7 @@ pub fn run() {
             ingest_source,
             delete_source,
             test_api_connection_cmd,
+            check_node_available,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgCensus Compiler");
