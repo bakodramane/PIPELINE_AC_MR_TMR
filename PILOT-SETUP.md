@@ -14,9 +14,11 @@ Installs to your personal AppData folder. No admin password required.
 If Windows SmartScreen appears, click "More info" then "Run anyway".
 
 **Option C — Portable (no installation at all):**
-Unzip `AgCensus-Compiler-portable-win.zip` to any location (Desktop, Documents, USB drive).
+Unzip `AgCensus-Compiler-portable-win.zip` to any location
+(Desktop, Documents, USB drive, network share).
 Double-click `agcensus-compiler.exe` to launch.
-Nothing is installed and nothing is left behind when you delete the folder.
+Node.js is included in the ZIP — nothing else needs to be installed.
+Nothing is left on your system when you delete the folder.
 
 ## What you need (one-time setup, ~10 minutes)
 
@@ -78,8 +80,8 @@ For complex or non-English documents, try Kimi K2.6 or Claude Opus 4.7.
 
 ## Troubleshooting
 
-**"Could not load projects"** — The Documents\AgCensus folder may not exist yet.
-Create a project using "+ New project" and it will be created automatically.
+**Empty project list on first launch** — Normal. The Documents\AgCensus folder is
+created automatically. Click "+ New project" to add your first country project.
 
 **Sections generate as "empty"** — Your source PDFs may not be indexed yet.
 Go to the Sources tab and add your PDFs before generating.

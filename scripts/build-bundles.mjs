@@ -18,6 +18,7 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { createWriteStream } from 'fs';
@@ -134,12 +135,27 @@ if (process.argv.includes('--portable')) {
     process.exit(1);
   }
 
+  // Find node.exe on the developer's machine
+  let nodeExePath;
+  try {
+    nodeExePath = execSync('where node', { encoding: 'utf8' })
+      .trim().split('\n')[0].trim();
+    if (!nodeExePath.endsWith('.exe') && !nodeExePath.includes('node')) {
+      throw new Error('node not found');
+    }
+    console.log(`Bundling node.exe from: ${nodeExePath}`);
+  } catch {
+    console.error('ERROR: node.exe not found on PATH. Cannot create self-contained portable ZIP.');
+    process.exit(1);
+  }
+
   const zipPath = path.join(distDir, 'AgCensus-Compiler-portable-win.zip');
   const output = createWriteStream(zipPath);
   const archive = archiver('zip', { zlib: { level: 9 } });
 
   archive.pipe(output);
   archive.file(exePath, { name: 'agcensus-compiler.exe' });
+  archive.file(nodeExePath, { name: 'node.exe' });
   archive.directory(path.join(ROOT, 'dist-scripts'), 'dist-scripts');
 
   await new Promise((resolve, reject) => {

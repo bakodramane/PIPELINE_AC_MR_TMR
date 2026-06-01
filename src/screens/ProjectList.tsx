@@ -204,17 +204,16 @@ function EmptyState({
         </svg>
       </div>
       <h2 className="text-base font-semibold text-gray-800 mb-1">
-        No projects found
+        No projects yet
       </h2>
-      <p className="text-sm text-gray-500 max-w-sm mb-2">
-        Looking in:{" "}
-        <code className="bg-gray-100 px-1 py-0.5 rounded text-xs break-all">
+      <p className="text-sm text-gray-500 max-w-sm mb-6">
+        Click <strong>+ New project</strong> to create your first country project.
+      </p>
+      <p className="text-xs text-gray-400 max-w-sm mb-2">
+        Projects folder:{" "}
+        <code className="bg-gray-100 px-1 py-0.5 rounded break-all">
           {baseDir}
         </code>
-      </p>
-      <p className="text-sm text-gray-500 max-w-sm mb-6">
-        Create that directory and run the generator CLI scripts to populate it,
-        or choose a different folder.
       </p>
       <button
         onClick={onChangeDir}

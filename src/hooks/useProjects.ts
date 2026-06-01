@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { readDir, readTextFile, exists } from "@tauri-apps/plugin-fs";
+import { readDir, readTextFile, exists, mkdir } from "@tauri-apps/plugin-fs";
 import { homeDir } from "@tauri-apps/api/path";
 import type { Manifest, ClaimsJson } from "../project/schema";
 import {
@@ -189,18 +189,18 @@ export function useProjects(): UseProjectsResult {
           setBaseDirState(resolvedBase);
         }
 
-        // Check base dir exists
-        const baseDirExists = await exists(resolvedBase);
-        if (!baseDirExists) {
-          if (!cancelled) {
-            setProjects([]);
-            setError(
-              `Project directory not found: ${resolvedBase}\n` +
-                "Create it and run the generator CLI scripts to populate it.",
-            );
-            setLoading(false);
+        // Ensure base dir exists — create silently on first launch
+        try {
+          await mkdir(resolvedBase, { recursive: true });
+        } catch (mkdirErr) {
+          const msg = String(mkdirErr).toLowerCase();
+          if (!msg.includes("already exist") && !msg.includes("exists")) {
+            if (!cancelled) {
+              setError(`Could not create project directory: ${String(mkdirErr)}`);
+              setLoading(false);
+            }
+            return;
           }
-          return;
         }
 
         // List immediate subdirectories

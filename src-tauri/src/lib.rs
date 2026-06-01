@@ -104,6 +104,16 @@ fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
 /// Checks well-known Windows install locations, then falls back to PATH.
 /// Returns the full path on success, or `None` if Node is not found.
 fn find_node_binary() -> Option<PathBuf> {
+    // Portable mode: look for node.exe alongside the running executable
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let portable_node = exe_dir.join("node.exe");
+            if portable_node.exists() {
+                return Some(portable_node);
+            }
+        }
+    }
+
     // Well-known Windows install locations
     let candidates: Vec<PathBuf> = [
         std::env::var("ProgramFiles").ok()
@@ -814,24 +824,31 @@ async fn test_api_connection_cmd(
 /// if Node is missing (generation and ingest both require Node at runtime).
 #[tauri::command]
 fn check_node_available() -> Result<String, String> {
-    std::process::Command::new("node")
+    let node = find_node_binary().ok_or_else(|| {
+        "Node.js is not installed or not on PATH. \
+         Please install Node.js (LTS) from nodejs.org, then restart this application."
+            .to_string()
+    })?;
+    let out = std::process::Command::new(&node)
         .arg("--version")
         .output()
-        .map_err(|_| {
-            "Node.js is not installed or not on PATH. \
-             Please install Node.js (LTS) from nodejs.org, then restart this application."
-                .to_string()
-        })
-        .and_then(|out| {
-            if out.status.success() {
-                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-            } else {
-                Err(format!(
-                    "node --version failed (exit {:?})",
-                    out.status.code()
-                ))
-            }
-        })
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(format!("node --version failed (exit {:?})", out.status.code()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ensure base dir command
+// ---------------------------------------------------------------------------
+
+/// Create the AgCensus base directory (and any missing parents) if it does
+/// not yet exist.  Returns Ok(()) whether or not the directory already existed.
+#[tauri::command]
+fn ensure_base_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,6 +1029,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             generate_mr_sections,
             generate_tmr_subtable,
+            ensure_base_dir,
             create_project,
             export_project,
             save_mr_section,
