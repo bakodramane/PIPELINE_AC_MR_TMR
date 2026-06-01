@@ -1,22 +1,38 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default capability set for the main AgCensus Compiler window.",
-  "windows": ["main"],
-  "permissions": [
-    "core:default",
-    {
-      "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$HOME/**" }]
-    },
-    {
-      "identifier": "fs:allow-read-dir",
-      "allow": [{ "path": "$HOME/**" }]
-    },
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$HOME/**" }]
-    },
-    "dialog:allow-open"
-  ]
+    "$schema":  "../gen/schemas/desktop-schema.json",
+    "identifier":  "default",
+    "description":  "Default capability set for the main AgCensus Compiler window.",
+    "windows":  [
+                    "main"
+                ],
+    "permissions":  [
+                        "core:default",
+                        {
+                            "identifier":  "fs:allow-read-text-file",
+                            "allow":  [
+                                          {
+                                              "path":  "$HOME/**"
+                                          }
+                                      ]
+                        },
+                        {
+                            "identifier":  "fs:allow-read-dir",
+                            "allow":  [
+                                          {
+                                              "path":  "$HOME/**"
+                                          }
+                                      ]
+                        },
+                        {
+                            "identifier":  "fs:allow-exists",
+                            "allow":  [
+                                          {
+                                              "path":  "$HOME/**"
+                                          }
+                                      ]
+                        },
+                        "dialog:allow-open",
+                        "fs:allow-mkdir",
+                        "fs:allow-mkdir"
+                    ]
 }

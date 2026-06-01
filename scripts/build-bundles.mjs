@@ -12,7 +12,7 @@
  * External packages (tesseract.js, pdf-parse, xlsx, docx) are kept external
  * because they contain WASM binaries or native add-ons.  They are shipped as
  * Tauri resources under node_modules/ so Node can find them at runtime.
- * @anthropic-ai/sdk is bundled directly — it is pure JS with only Node built-ins.
+ * @anthropic-ai/sdk is bundled directly ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â it is pure JS with only Node built-ins.
  */
 
 import { build } from 'esbuild';
@@ -23,7 +23,7 @@ import path from 'path';
 import fs from 'fs';
 import { createWriteStream } from 'fs';
 
-// archiver is CommonJS — use createRequire to load it from an ESM file
+// archiver is CommonJS ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â use createRequire to load it from an ESM file
 const require = createRequire(import.meta.url);
 const archiver = require('archiver');
 
@@ -54,7 +54,7 @@ const shared = {
   target:   'node18',
   outdir:   OUT,
   outExtension: { '.js': '.mjs' },
-  // tesseract.js ships WASM worker files that cannot be bundled — keep external.
+  // tesseract.js ships WASM worker files that cannot be bundled ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â keep external.
   // The OCR fallback path requires tesseract.js to exist in node_modules at runtime;
   // all other packages (docx, xlsx, pdf-parse) are bundled directly.
   external: ['tesseract.js'],
@@ -129,7 +129,7 @@ if (process.argv.includes('--portable')) {
   const distDir = path.join(ROOT, 'dist');
   if (!fs.existsSync(distDir)) fs.mkdirSync(distDir);
 
-  const exePath = path.join(ROOT, 'src-tauri', 'target', 'release', 'agcensus-compiler.exe');
+  const exePath = path.join(process.env.CARGO_TARGET_DIR || path.join(ROOT, 'src-tauri', 'target'), 'release', 'agcensus-compiler.exe');
   if (!fs.existsSync(exePath)) {
     console.error('ERROR: Release binary not found. Run tauri build first.');
     process.exit(1);
@@ -150,19 +150,15 @@ if (process.argv.includes('--portable')) {
   }
 
   const zipPath = path.join(distDir, 'AgCensus-Compiler-portable-win.zip');
-  const output = createWriteStream(zipPath);
-  const archive = archiver('zip', { zlib: { level: 9 } });
-
-  archive.pipe(output);
-  archive.file(exePath, { name: 'agcensus-compiler.exe' });
-  archive.file(nodeExePath, { name: 'node.exe' });
-  archive.directory(path.join(ROOT, 'dist-scripts'), 'dist-scripts');
-
-  await new Promise((resolve, reject) => {
-    output.on('close', resolve);
-    archive.on('error', reject);
-    archive.finalize();
-  });
-
-  console.log(`Portable ZIP written to ${zipPath} (${Math.round(archive.pointer() / 1024 / 1024)} MB)`);
+  const stagingDir = path.join(ROOT, 'dist', 'portable-staging');
+  if (fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true });
+  fs.mkdirSync(stagingDir, { recursive: true });
+  fs.copyFileSync(exePath, path.join(stagingDir, 'agcensus-compiler.exe'));
+  fs.copyFileSync(nodeExePath, path.join(stagingDir, 'node.exe'));
+  fs.cpSync(path.join(ROOT, 'dist-scripts'), path.join(stagingDir, 'dist-scripts'), { recursive: true });
+  if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  execSync('powershell -Command "Compress-Archive -Path \\"' + stagingDir + '\\\\*\\" -DestinationPath \\"' + zipPath + '\\" -Force"', { stdio: 'inherit' });
+  fs.rmSync(stagingDir, { recursive: true });
+  const zipSize = Math.round(fs.statSync(zipPath).size / 1024 / 1024);
+  console.log('Portable ZIP written to ' + zipPath + ' (' + zipSize + ' MB)');
 }
