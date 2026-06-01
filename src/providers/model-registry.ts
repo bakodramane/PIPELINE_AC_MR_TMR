@@ -136,6 +136,32 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     supportsThinking: true,
     bestFor: "Best narrative quality, nuanced evidence interpretation",
   },
+
+  // ── Azure — FAO enterprise ─────────────────────────────────────────────────
+  {
+    model: "azure-gpt-4o",
+    provider: "azure",
+    displayName: "Azure GPT-4o (FAO)",
+    tier: 3,
+    tierLabel: "Premium",
+    inputCostPerM: 2.50,
+    outputCostPerM: 10.00,
+    contextWindow: 128_000,
+    supportsThinking: false,
+    bestFor: "FAO enterprise deployment — complex multilingual documents",
+  },
+  {
+    model: "azure-gpt-4o-mini",
+    provider: "azure",
+    displayName: "Azure GPT-4o mini (FAO)",
+    tier: 1,
+    tierLabel: "Budget",
+    inputCostPerM: 0.15,
+    outputCostPerM: 0.60,
+    contextWindow: 128_000,
+    supportsThinking: false,
+    bestFor: "FAO enterprise deployment — routine documents at low cost",
+  },
 ];
 
 export const MODELS_BY_TIER: Record<1 | 2 | 3, ModelInfo[]> = {

@@ -1,5 +1,23 @@
 # Ag Census MR TMR Compiler — Pilot Setup Guide
 
+## Installation options
+
+Three formats are available depending on your IT setup:
+
+**Option A — Standard installer (requires admin rights):**
+Run `Ag Census MR TMR Compiler_1.0.0_x64_en-US.msi`.
+Installs to Program Files. Recommended for permanent workstation installations managed by IT.
+
+**Option B — No-admin installer (recommended for office laptops):**
+Run `Ag Census MR TMR Compiler_1.0.0_x64-setup.exe`.
+Installs to your personal AppData folder. No admin password required.
+If Windows SmartScreen appears, click "More info" then "Run anyway".
+
+**Option C — Portable (no installation at all):**
+Unzip `AgCensus-Compiler-portable-win.zip` to any location (Desktop, Documents, USB drive).
+Double-click `agcensus-compiler.exe` to launch.
+Nothing is installed and nothing is left behind when you delete the folder.
+
 ## What you need (one-time setup, ~10 minutes)
 
 1. **Install Node.js** — go to nodejs.org, download the LTS version,

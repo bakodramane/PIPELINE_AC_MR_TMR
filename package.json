@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:scripts": "node scripts/build-bundles.mjs",
-    "build:all": "npm run build:scripts && npm run build && tauri build"
+    "build:all": "npm run build:scripts && npm run build && tauri build",
+    "build:portable": "node scripts/build-bundles.mjs --portable"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",
@@ -37,6 +38,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "archiver": "^8.0.0",
     "autoprefixer": "^10.4.20",
     "esbuild": "^0.28.0",
     "postcss": "^8.4.49",

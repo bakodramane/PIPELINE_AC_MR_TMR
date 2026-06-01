@@ -1,4 +1,4 @@
-export type Provider = "deepseek" | "kimi" | "google" | "openai" | "anthropic";
+export type Provider = "deepseek" | "kimi" | "google" | "openai" | "anthropic" | "azure";
 
 export type Model =
   // Tier 1 — Budget
@@ -13,7 +13,10 @@ export type Model =
   // Tier 3 — Premium
   | "gpt-4o"
   | "gemini-2.5-pro"
-  | "claude-opus-4-7";
+  | "claude-opus-4-7"
+  // Azure — FAO enterprise
+  | "azure-gpt-4o"
+  | "azure-gpt-4o-mini";
 
 export interface GenerateOptions {
   systemPrompt: string;
@@ -45,6 +48,13 @@ export interface GenerateResult {
 export interface ModelPricing {
   inputPerMillion: number;
   outputPerMillion: number;
+}
+
+export interface AzureConfig {
+  endpoint: string;       // e.g. https://fao-openai.openai.azure.com
+  deploymentName: string; // e.g. gpt-4o
+  apiVersion: string;     // default: 2024-05-01-preview
+  apiKey: string;
 }
 
 export interface ModelInfo {

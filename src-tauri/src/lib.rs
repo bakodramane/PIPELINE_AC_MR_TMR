@@ -189,6 +189,7 @@ fn provider_for_model(model: &str) -> &'static str {
     if model.starts_with("gemini-")   { return "google"; }
     if model.starts_with("gpt-")      { return "openai"; }
     if model.starts_with("claude-")   { return "anthropic"; }
+    if model.starts_with("azure-")    { return "azure"; }
     "deepseek" // safe fallback
 }
 
@@ -251,9 +252,16 @@ async fn generate_mr_sections(
     let resource_root: Option<String> = find_node_scripts_dir(&app)
         .map(|d| d.to_string_lossy().into_owned());
 
-    // Determine the provider and look up any stored API key
+    // Determine the provider and look up any stored API key.
+    // Azure stores the key under "azure_api_key" to separate it from
+    // the endpoint and deployment entries in the same store.
     let provider = provider_for_model(&model);
-    let api_key  = read_api_key_from_store(&app, provider);
+    let key_store_name = if provider == "azure" { "azure_api_key" } else { provider };
+    let api_key  = read_api_key_from_store(&app, key_store_name);
+
+    // For Azure, also read the endpoint and deployment from the store.
+    let azure_endpoint   = if provider == "azure" { read_api_key_from_store(&app, "azure_endpoint")   } else { None };
+    let azure_deployment = if provider == "azure" { read_api_key_from_store(&app, "azure_deployment") } else { None };
 
     args.extend([
         "--project".to_string(),
@@ -270,6 +278,14 @@ async fn generate_mr_sections(
     // Node script will fall back to process.env / the .env file.
     if let Some(ref key) = api_key {
         args.extend(["--api-key".to_string(), key.clone()]);
+    }
+
+    // Pass Azure-specific config when available.
+    if let Some(ref ep) = azure_endpoint {
+        args.extend(["--azure-endpoint".to_string(), ep.clone()]);
+    }
+    if let Some(ref dep) = azure_deployment {
+        args.extend(["--azure-deployment".to_string(), dep.clone()]);
     }
 
     let total: u32 = if let Some(n) = section {
@@ -364,7 +380,11 @@ async fn generate_tmr_subtable(
     let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
 
     let provider = provider_for_model(&model);
-    let api_key  = read_api_key_from_store(&app, provider);
+    let key_store_name = if provider == "azure" { "azure_api_key" } else { provider };
+    let api_key  = read_api_key_from_store(&app, key_store_name);
+
+    let azure_endpoint   = if provider == "azure" { read_api_key_from_store(&app, "azure_endpoint")   } else { None };
+    let azure_deployment = if provider == "azure" { read_api_key_from_store(&app, "azure_deployment") } else { None };
 
     args.extend([
         "--project".to_string(),
@@ -379,6 +399,13 @@ async fn generate_tmr_subtable(
 
     if let Some(ref key) = api_key {
         args.extend(["--api-key".to_string(), key.clone()]);
+    }
+
+    if let Some(ref ep) = azure_endpoint {
+        args.extend(["--azure-endpoint".to_string(), ep.clone()]);
+    }
+    if let Some(ref dep) = azure_deployment {
+        args.extend(["--azure-deployment".to_string(), dep.clone()]);
     }
 
     let total: u32 = if sub_table_number == 0 {

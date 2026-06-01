@@ -51,7 +51,10 @@ type Model =
   // Tier 3
   | "gpt-4o"
   | "gemini-2.5-pro"
-  | "claude-opus-4-7";
+  | "claude-opus-4-7"
+  // Azure — FAO enterprise
+  | "azure-gpt-4o"
+  | "azure-gpt-4o-mini";
 
 // ---------------------------------------------------------------------------
 // .env loader — sets missing process.env keys from <PIPELINE_ROOT>/.env
@@ -92,6 +95,8 @@ interface ParsedArgs {
   model: Model;
   provider?: string;
   apiKey?: string;
+  azureEndpoint?: string;
+  azureDeployment?: string;
 }
 
 // env-var name for each provider
@@ -101,6 +106,7 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
   google:    "GOOGLE_API_KEY",
   openai:    "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
+  azure:     "AZURE_OPENAI_API_KEY",
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -130,6 +136,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--api-key":
         result.apiKey = argv[++i];
+        break;
+      case "--azure-endpoint":
+        result.azureEndpoint = argv[++i];
+        break;
+      case "--azure-deployment":
+        result.azureDeployment = argv[++i];
         break;
     }
   }
@@ -171,6 +183,16 @@ async function main(): Promise<void> {
     // Alias MOONSHOT_API_KEY → KIMI_API_KEY so either env var works
     if (!process.env["KIMI_API_KEY"] && process.env["MOONSHOT_API_KEY"]) {
       process.env["KIMI_API_KEY"] = process.env["MOONSHOT_API_KEY"];
+    }
+
+    // Inject Azure endpoint and deployment so provider module can read them
+    if (args.provider === "azure") {
+      if (args.azureEndpoint && !process.env["AZURE_OPENAI_ENDPOINT"]) {
+        process.env["AZURE_OPENAI_ENDPOINT"] = args.azureEndpoint;
+      }
+      if (args.azureDeployment && !process.env["AZURE_OPENAI_DEPLOYMENT"]) {
+        process.env["AZURE_OPENAI_DEPLOYMENT"] = args.azureDeployment;
+      }
     }
 
     if (!args.project) {

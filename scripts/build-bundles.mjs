@@ -17,8 +17,14 @@
 
 import { build } from 'esbuild';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import path from 'path';
 import fs from 'fs';
+import { createWriteStream } from 'fs';
+
+// archiver is CommonJS — use createRequire to load it from an ESM file
+const require = createRequire(import.meta.url);
+const archiver = require('archiver');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -113,3 +119,34 @@ copyFile(
 );
 
 console.log('Data files copied to dist-scripts/');
+
+// ---------------------------------------------------------------------------
+// Portable ZIP (only when --portable flag is passed)
+// ---------------------------------------------------------------------------
+
+if (process.argv.includes('--portable')) {
+  const distDir = path.join(ROOT, 'dist');
+  if (!fs.existsSync(distDir)) fs.mkdirSync(distDir);
+
+  const exePath = path.join(ROOT, 'src-tauri', 'target', 'release', 'agcensus-compiler.exe');
+  if (!fs.existsSync(exePath)) {
+    console.error('ERROR: Release binary not found. Run tauri build first.');
+    process.exit(1);
+  }
+
+  const zipPath = path.join(distDir, 'AgCensus-Compiler-portable-win.zip');
+  const output = createWriteStream(zipPath);
+  const archive = archiver('zip', { zlib: { level: 9 } });
+
+  archive.pipe(output);
+  archive.file(exePath, { name: 'agcensus-compiler.exe' });
+  archive.directory(path.join(ROOT, 'dist-scripts'), 'dist-scripts');
+
+  await new Promise((resolve, reject) => {
+    output.on('close', resolve);
+    archive.on('error', reject);
+    archive.finalize();
+  });
+
+  console.log(`Portable ZIP written to ${zipPath} (${Math.round(archive.pointer() / 1024 / 1024)} MB)`);
+}

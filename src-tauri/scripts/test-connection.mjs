@@ -100,12 +100,29 @@ async function main() {
       google:    "GOOGLE_API_KEY",
       openai:    "OPENAI_API_KEY",
       anthropic: "ANTHROPIC_API_KEY",
+      azure:     "AZURE_OPENAI_API_KEY",
     };
-    const envVar = PROVIDER_ENV_VARS[args.provider];
-    if (envVar) process.env[envVar] = args.apiKey;
-    // Kimi accepts both KIMI_API_KEY and MOONSHOT_API_KEY
-    if (args.provider === "kimi") {
-      process.env["MOONSHOT_API_KEY"] = args.apiKey;
+
+    // Azure passes a JSON bundle { key, endpoint, deployment } as the api-key value
+    if (args.provider === "azure" && args.apiKey.trim().startsWith("{")) {
+      let bundle;
+      try {
+        bundle = JSON.parse(args.apiKey);
+      } catch {
+        writeLine("ERROR:Failed to parse Azure config JSON");
+        return;
+      }
+      args.apiKey = bundle.key ?? "";
+      process.env["AZURE_OPENAI_API_KEY"]   = bundle.key        ?? "";
+      process.env["AZURE_OPENAI_ENDPOINT"]  = bundle.endpoint   ?? "";
+      process.env["AZURE_OPENAI_DEPLOYMENT"]= bundle.deployment ?? "";
+    } else {
+      const envVar = PROVIDER_ENV_VARS[args.provider];
+      if (envVar) process.env[envVar] = args.apiKey;
+      // Kimi accepts both KIMI_API_KEY and MOONSHOT_API_KEY
+      if (args.provider === "kimi") {
+        process.env["MOONSHOT_API_KEY"] = args.apiKey;
+      }
     }
 
     let mod;

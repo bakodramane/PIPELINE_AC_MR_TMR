@@ -98,6 +98,14 @@ const LS_TMR_MODEL = "agcensus_tmr_model";
 const LS_BASE_DIR  = "agcensus_base_dir";
 
 // ---------------------------------------------------------------------------
+// Azure connection status type
+// ---------------------------------------------------------------------------
+
+type AzureStatus =
+  | { ok: true; ms: number }
+  | { ok: false; msg: string };
+
+// ---------------------------------------------------------------------------
 // Connection status type
 // ---------------------------------------------------------------------------
 
@@ -324,6 +332,65 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
   const [editingDir, setEditingDir] = useState(false);
   const [dirInput, setDirInput]     = useState("");
 
+  // ── Azure OpenAI state ────────────────────────────────────────────────────
+  const [azureEndpoint,   setAzureEndpoint]   = useState("");
+  const [azureDeployment, setAzureDeployment] = useState("");
+  const [azureKey,        setAzureKey]        = useState("");
+  const [azureKeyVisible, setAzureKeyVisible] = useState(false);
+  const [azureTesting,    setAzureTesting]    = useState(false);
+  const [azureStatus,     setAzureStatus]     = useState<AzureStatus | null>(null);
+  const [azureConfigured, setAzureConfigured] = useState(false);
+
+  // Load saved Azure settings on mount
+  useEffect(() => {
+    void Promise.all([
+      invoke<string | null>("get_api_key", { provider: "azure_endpoint" }),
+      invoke<string | null>("get_api_key", { provider: "azure_deployment" }),
+      invoke<string | null>("get_api_key", { provider: "azure_api_key" }),
+    ]).then(([ep, dep, key]) => {
+      if (ep)  setAzureEndpoint(ep);
+      if (dep) setAzureDeployment(dep);
+      if (key) { setAzureKey(key); setAzureConfigured(true); }
+    });
+  }, []);
+
+  async function handleAzureSave() {
+    try {
+      await invoke("save_api_key", { provider: "azure_endpoint",   key: azureEndpoint });
+      await invoke("save_api_key", { provider: "azure_deployment", key: azureDeployment });
+      await invoke("save_api_key", { provider: "azure_api_key",    key: azureKey });
+      setAzureConfigured(true);
+      onToast("Azure OpenAI settings saved.", "success");
+    } catch (err) {
+      onToast(`Failed to save Azure settings: ${String(err)}`, "error");
+    }
+  }
+
+  async function handleAzureTest() {
+    if (!azureKey || !azureEndpoint || !azureDeployment) {
+      setAzureStatus({ ok: false, msg: "Fill in endpoint, deployment, and API key first" });
+      return;
+    }
+    setAzureTesting(true);
+    setAzureStatus(null);
+    try {
+      const bundle = JSON.stringify({
+        key: azureKey,
+        endpoint: azureEndpoint,
+        deployment: azureDeployment,
+      });
+      const latencyStr = await invoke<string>("test_api_connection_cmd", {
+        provider: "azure",
+        apiKey: bundle,
+      });
+      setAzureStatus({ ok: true, ms: parseInt(latencyStr, 10) });
+    } catch (err) {
+      setAzureStatus({ ok: false, msg: String(err) });
+    } finally {
+      setAzureTesting(false);
+    }
+  }
+
   function handleChangeDir() {
     setDirInput(baseDir);
     setEditingDir(true);
@@ -374,6 +441,109 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
             {PROVIDERS.map((p) => (
               <ApiKeyRow key={p.id} config={p} />
             ))}
+
+            {/* Azure OpenAI — FAO Microsoft 365 */}
+            <div className="border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+                    AZURE
+                  </span>
+                  <span className="font-semibold text-sm">
+                    Azure OpenAI (FAO Microsoft 365)
+                  </span>
+                </div>
+                <span
+                  className={
+                    azureConfigured ? "text-green-600 text-sm" : "text-gray-400 text-sm"
+                  }
+                >
+                  {azureConfigured ? "✓ Configured" : "Not configured"}
+                </span>
+              </div>
+
+              <div className="space-y-2 mb-3">
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">
+                    Endpoint URL
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="https://your-resource.openai.azure.com"
+                    value={azureEndpoint}
+                    onChange={(e) => setAzureEndpoint(e.target.value)}
+                    className="w-full border rounded px-3 py-1.5 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">
+                    Deployment name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="gpt-4o"
+                    value={azureDeployment}
+                    onChange={(e) => setAzureDeployment(e.target.value)}
+                    className="w-full border rounded px-3 py-1.5 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">
+                    API key
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type={azureKeyVisible ? "text" : "password"}
+                      placeholder="Paste API key…"
+                      value={azureKey}
+                      onChange={(e) => setAzureKey(e.target.value)}
+                      className="flex-1 border rounded px-3 py-1.5 text-sm font-mono"
+                    />
+                    <button
+                      onClick={() => setAzureKeyVisible((v) => !v)}
+                      className="text-xs text-gray-500 px-2 border rounded"
+                    >
+                      {azureKeyVisible ? "hide" : "show"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void handleAzureTest()}
+                  disabled={azureTesting}
+                  className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {azureTesting ? "…" : "Test"}
+                </button>
+                <button
+                  onClick={() => void handleAzureSave()}
+                  className="px-3 py-1.5 text-sm bg-[#1B4F23] text-white rounded hover:bg-green-800"
+                >
+                  Save
+                </button>
+              </div>
+
+              <p className="text-xs text-gray-400 mt-2">
+                Your IT administrator can provide the endpoint URL, deployment name, and
+                API key from the Azure Portal under your OpenAI resource → Keys and Endpoint.
+                Environment variables:{" "}
+                <code className="font-mono">AZURE_OPENAI_ENDPOINT</code>,{" "}
+                <code className="font-mono">AZURE_OPENAI_DEPLOYMENT</code>,{" "}
+                <code className="font-mono">AZURE_OPENAI_API_KEY</code>
+              </p>
+
+              {azureStatus !== null && (
+                <p
+                  className={`text-sm mt-2 ${azureStatus.ok ? "text-green-600" : "text-red-600"}`}
+                >
+                  {azureStatus.ok
+                    ? `✓ OK · ${azureStatus.ms}ms`
+                    : `✗ ${azureStatus.msg}`}
+                </p>
+              )}
+            </div>
           </div>
         </section>
 
@@ -464,17 +634,17 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
           <div className="bg-white border border-gray-200 rounded-lg px-5 py-4 text-xs text-gray-500 space-y-1">
             <div className="flex items-center justify-between">
               <span>Ag Census MR TMR Compiler</span>
-              <span className="font-mono text-gray-400">Session 22</span>
+              <span className="font-mono text-gray-400">Session 25</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Supported providers</span>
               <span className="text-gray-400">
-                DeepSeek · Kimi · Google · OpenAI · Anthropic
+                DeepSeek · Kimi · Google · OpenAI · Anthropic · Azure
               </span>
             </div>
             <div className="flex items-center justify-between">
               <span>Models available</span>
-              <span className="text-gray-400">10 across 3 tiers</span>
+              <span className="text-gray-400">12 across 3 tiers</span>
             </div>
           </div>
         </section>

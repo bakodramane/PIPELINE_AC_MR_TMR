@@ -5,12 +5,14 @@ import { callKimi } from "./kimi";
 import { callGoogle } from "./google";
 import { callOpenAI } from "./openai";
 import { callAnthropic } from "./anthropic";
+import { generateAzure, testAzureConnection } from "./azure";
 import type {
   Provider,
   Model,
   GenerateOptions,
   GenerateResult,
   ModelPricing,
+  AzureConfig,
 } from "./types";
 
 export type { Provider, Model, GenerateOptions, GenerateResult } from "./types";
@@ -28,6 +30,7 @@ function getProvider(model: Model): Provider {
   if (model.startsWith("gemini-")) return "google";
   if (model.startsWith("gpt-")) return "openai";
   if (model.startsWith("claude-")) return "anthropic";
+  if (model.startsWith("azure-")) return "azure";
   throw new Error(`Unknown provider for model: ${model}`);
 }
 
@@ -38,6 +41,7 @@ function envVarForProvider(provider: Provider): string {
     case "google":     return "GOOGLE_API_KEY";
     case "openai":     return "OPENAI_API_KEY";
     case "anthropic":  return "ANTHROPIC_API_KEY";
+    case "azure":      return "AZURE_OPENAI_API_KEY";
   }
 }
 
@@ -57,6 +61,11 @@ async function resolveApiKey(provider: Provider): Promise<string> {
     if (provider === "kimi") {
       const moonshot = process.env["MOONSHOT_API_KEY"];
       if (moonshot) return moonshot;
+    }
+    // Azure accepts both AZURE_OPENAI_API_KEY and AZURE_API_KEY
+    if (provider === "azure") {
+      const alt = process.env["AZURE_API_KEY"];
+      if (alt) return alt;
     }
   }
 
@@ -121,6 +130,15 @@ export async function generate(
           return await callOpenAI(options, apiKey, modelPricing);
         case "anthropic":
           return await callAnthropic(options, apiKey, modelPricing);
+        case "azure": {
+          const azureConfig: AzureConfig = {
+            endpoint: (typeof process !== "undefined" && process.env["AZURE_OPENAI_ENDPOINT"]) || "",
+            deploymentName: (typeof process !== "undefined" && process.env["AZURE_OPENAI_DEPLOYMENT"]) || "",
+            apiVersion: "2024-05-01-preview",
+            apiKey,
+          };
+          return await generateAzure(options, azureConfig);
+        }
       }
     } catch (err) {
       lastError = err;
@@ -146,6 +164,7 @@ const TEST_MODELS: Record<Provider, Model> = {
   google:    "gemini-2.0-flash",
   openai:    "gpt-4o-mini",
   anthropic: "claude-opus-4-7",
+  azure:     "azure-gpt-4o-mini",
 };
 
 const TEST_OPTIONS = {
@@ -188,6 +207,16 @@ export async function testApiConnection(
       case "anthropic":
         await callAnthropic(opts, apiKey, modelPricing);
         break;
+      case "azure": {
+        const azureConfig: AzureConfig = {
+          endpoint: (typeof process !== "undefined" && process.env["AZURE_OPENAI_ENDPOINT"]) || "",
+          deploymentName: (typeof process !== "undefined" && process.env["AZURE_OPENAI_DEPLOYMENT"]) || "",
+          apiVersion: "2024-05-01-preview",
+          apiKey,
+        };
+        await testAzureConnection(azureConfig);
+        break;
+      }
     }
     return { success: true, latencyMs: Date.now() - start };
   } catch (err) {
