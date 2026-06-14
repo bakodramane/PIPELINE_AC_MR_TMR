@@ -333,6 +333,21 @@ function NewProjectForm({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        {/* Reference year */}
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Reference year
+          </label>
+          <input
+            type="text"
+            value={form.referenceYear}
+            onChange={(e) => setField("referenceYear", e.target.value)}
+            placeholder="e.g. 2024"
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+
         {/* Country */}
         <div>
           <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
@@ -341,19 +356,24 @@ function NewProjectForm({
           <input
             type="text"
             value={form.country}
-            onChange={(e) => {
-              const value = e.target.value;
-              const iso3Found = COUNTRY_TO_ISO3[value.trim().toLowerCase()];
-              const currentYear = new Date().getFullYear().toString();
-              setForm((f) => ({
-                ...f,
-                country: value,
-                iso3: iso3Found && !f.iso3.trim() ? iso3Found : f.iso3,
-                censusName:
-                  value.trim() && !f.censusName.trim()
-                    ? `${value.trim()} Agricultural Census ${f.referenceYear || currentYear}`
+            onChange={(e) => setField("country", e.target.value)}
+            onBlur={(e) => {
+              const country = e.target.value.trim();
+              if (!country) return;
+              const iso3Found = COUNTRY_TO_ISO3[country.toLowerCase()];
+              setForm((f) => {
+                const year =
+                  f.referenceYear.trim() ||
+                  new Date().getFullYear().toString();
+                return {
+                  ...f,
+                  iso3:
+                    iso3Found && !f.iso3.trim() ? iso3Found : f.iso3,
+                  censusName: !f.censusName.trim()
+                    ? `${country} Agricultural Census ${year}`
                     : f.censusName,
-              }));
+                };
+              });
             }}
             placeholder="e.g. Pakistan"
             required
@@ -377,36 +397,6 @@ function NewProjectForm({
           />
         </div>
 
-        {/* Census name */}
-        <div className="sm:col-span-2">
-          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
-            Census name
-          </label>
-          <input
-            type="text"
-            value={form.censusName}
-            onChange={(e) => setField("censusName", e.target.value)}
-            placeholder="e.g. Pakistan Agriculture Census 2024"
-            required
-            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
-          />
-        </div>
-
-        {/* Reference year */}
-        <div>
-          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
-            Reference year
-          </label>
-          <input
-            type="text"
-            value={form.referenceYear}
-            onChange={(e) => setField("referenceYear", e.target.value)}
-            placeholder="e.g. 2024"
-            required
-            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
-          />
-        </div>
-
         {/* Methodology type */}
         <div>
           <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
@@ -423,6 +413,21 @@ function NewProjectForm({
               </option>
             ))}
           </select>
+        </div>
+
+        {/* Census name */}
+        <div className="sm:col-span-2">
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Census name
+          </label>
+          <input
+            type="text"
+            value={form.censusName}
+            onChange={(e) => setField("censusName", e.target.value)}
+            placeholder="e.g. Pakistan Agricultural Census 2024"
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
         </div>
 
         {/* Statistical unit */}

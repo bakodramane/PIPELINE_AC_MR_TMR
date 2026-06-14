@@ -613,7 +613,11 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
           <div className="bg-white border border-gray-200 rounded-lg px-5 py-4 text-xs text-gray-500 space-y-1">
             <div className="flex items-center justify-between">
               <span>Ag Census MR TMR Compiler</span>
-              <span className="font-mono text-gray-400">Session 25</span>
+              <span className="font-mono text-gray-400">Session 26</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Author</span>
+              <span className="text-gray-400">D. Bako</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Supported providers</span>
@@ -623,7 +627,7 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
             </div>
             <div className="flex items-center justify-between">
               <span>Models available</span>
-              <span className="text-gray-400">12 across 3 tiers</span>
+              <span className="text-gray-400">14 across 6 providers</span>
             </div>
           </div>
         </section>

@@ -2,7 +2,7 @@
 name = "agcensus-compiler"
 version = "0.1.0"
 description = "AgCensus Compiler — FAO desktop app for compiling MR and TMR deliverables."
-authors = ["FAO ESS Census Team"]
+authors = ["D. Bako"]
 edition = "2021"
 
 [lib]

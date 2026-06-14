@@ -716,6 +716,8 @@ async fn ingest_source(
         .map_err(|e| format!("Failed to spawn ingest process: {e}"))?;
 
     let mut buf = String::new();
+    let mut stderr_buf = String::new();
+    let mut progress_emitted = false;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -726,6 +728,7 @@ async fn ingest_source(
                     buf = buf[pos + 1..].to_string();
 
                     if let Some(rest) = line.strip_prefix("DONE:") {
+                        progress_emitted = true;
                         let page_count = rest.trim().parse::<u32>().ok();
                         let _ = app.emit(
                             "ingest-progress",
@@ -737,6 +740,7 @@ async fn ingest_source(
                             },
                         );
                     } else if let Some(rest) = line.strip_prefix("ERROR:") {
+                        progress_emitted = true;
                         let _ = app.emit(
                             "ingest-progress",
                             IngestProgressPayload {
@@ -749,10 +753,30 @@ async fn ingest_source(
                     }
                 }
             }
-            CommandEvent::Stderr(_) => {}
+            CommandEvent::Stderr(bytes) => {
+                stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
             CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
             _ => {}
         }
+    }
+
+    // Surface the real error when the process exits without printing DONE:/ERROR:.
+    if !progress_emitted {
+        let msg = if stderr_buf.trim().is_empty() {
+            "Ingest process exited without output".to_string()
+        } else {
+            stderr_buf.trim().chars().take(800).collect()
+        };
+        let _ = app.emit(
+            "ingest-progress",
+            IngestProgressPayload {
+                doc_id,
+                status: "error".to_string(),
+                page_count: None,
+                message: Some(msg),
+            },
+        );
     }
 
     Ok(())

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "AgCensus Compiler — FAO desktop app for compiling Metadata Reviews and Tables of Main Results from agricultural census documents.",
+  "author": "D. Bako",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
