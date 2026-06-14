@@ -163,7 +163,7 @@ const TEST_MODELS: Record<Provider, Model> = {
   kimi:      "kimi-k2.6",
   google:    "gemini-2.0-flash",
   openai:    "gpt-4o-mini",
-  anthropic: "claude-opus-4-7",
+  anthropic: "claude-haiku-4-5",
   azure:     "azure-gpt-4o-mini",
 };
 

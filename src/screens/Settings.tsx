@@ -16,6 +16,7 @@
 
 import { useState, useEffect, type FC } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { MODELS_BY_TIER, DEFAULT_MR_MODEL, DEFAULT_TMR_MODEL } from "../providers/model-registry";
 import type { Provider, Model } from "../providers/types";
 import type { ToastMessage } from "../types/ui";
@@ -329,8 +330,6 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
   const [baseDir, setBaseDirLocal] = useState<string>(
     () => localStorage.getItem(LS_BASE_DIR) ?? "",
   );
-  const [editingDir, setEditingDir] = useState(false);
-  const [dirInput, setDirInput]     = useState("");
 
   // ── Azure OpenAI state ────────────────────────────────────────────────────
   const [azureEndpoint,   setAzureEndpoint]   = useState("");
@@ -391,17 +390,20 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
     }
   }
 
-  function handleChangeDir() {
-    setDirInput(baseDir);
-    setEditingDir(true);
-  }
-
-  function handleSaveDir() {
-    const trimmed = dirInput.trim();
-    if (!trimmed) return;
-    localStorage.setItem(LS_BASE_DIR, trimmed);
-    setBaseDirLocal(trimmed);
-    setEditingDir(false);
+  async function handleChangeFolder() {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || typeof selected !== "string") return;
+    const parts = selected.replace(/\\/g, "/").split("/");
+    const leaf = parts[parts.length - 1];
+    let finalDir: string;
+    if (leaf === "AgCensus") {
+      finalDir = selected;
+    } else {
+      const sep = selected.includes("\\") ? "\\" : "/";
+      finalDir = `${selected.replace(/[/\\]+$/, "")}${sep}AgCensus`;
+    }
+    localStorage.setItem(LS_BASE_DIR, finalDir);
+    setBaseDirLocal(finalDir);
     onToast("Project folder updated — reload the project list to see changes.", "info");
   }
 
@@ -577,52 +579,29 @@ const Settings: FC<SettingsProps> = ({ onBack, onToast }) => {
             Project Folder
           </h2>
           <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
-            {editingDir ? (
-              <>
-                <input
-                  type="text"
-                  value={dirInput}
-                  onChange={(e) => setDirInput(e.target.value)}
-                  className="w-full text-xs font-mono border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-gray-400"
-                  placeholder="C:\Users\you\Documents\AgCensus"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveDir}
-                    className="text-xs bg-[#1B4F23] text-white rounded-lg px-4 py-1.5 hover:bg-[#163d1c] transition-colors"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => setEditingDir(false)}
-                    className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-500 hover:border-gray-300 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-[10px] text-gray-400 mb-0.5">
-                    Current project base directory
-                  </p>
-                  <p className="text-xs font-mono text-gray-700 break-all">
-                    {baseDir || (
-                      <span className="italic text-gray-400">
-                        Using default: ~/Documents/AgCensus
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <button
-                  onClick={handleChangeDir}
-                  className="shrink-0 text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
-                >
-                  Change
-                </button>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[10px] text-gray-400 mb-0.5">
+                  Current project base directory
+                </p>
+                <p className="text-xs font-mono text-gray-700 break-all">
+                  {baseDir || (
+                    <span className="italic text-gray-400">
+                      Using default: ~/Documents/AgCensus
+                    </span>
+                  )}
+                </p>
               </div>
-            )}
+              <button
+                onClick={() => void handleChangeFolder()}
+                className="shrink-0 text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors flex items-center gap-1"
+              >
+                <span>📁</span> Change
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-400">
+              Projects will be stored in an &lsquo;AgCensus&rsquo; folder inside your chosen location.
+            </p>
           </div>
         </section>
 

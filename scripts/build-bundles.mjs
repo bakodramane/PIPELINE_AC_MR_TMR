@@ -149,7 +149,7 @@ if (process.argv.includes('--portable')) {
     process.exit(1);
   }
 
-  const zipPath = path.join(distDir, 'AgCensus-Compiler-portable-win.zip');
+  const zipPath = path.join(distDir, 'AgCensus-MR-TMR-Compiler-portable-win.zip');
   const stagingDir = path.join(ROOT, 'dist', 'portable-staging');
   if (fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true });
   fs.mkdirSync(stagingDir, { recursive: true });

@@ -2,7 +2,7 @@
  * Model registry — single source of truth for all supported LLM models.
  *
  * Exports:
- *   MODEL_REGISTRY   — flat array of ModelInfo for all 10 models
+ *   MODEL_REGISTRY   — flat array of ModelInfo for all 14 models
  *   MODELS_BY_TIER   — grouped by tier (1=Budget, 2=Mid-range, 3=Premium)
  *   DEFAULT_MR_MODEL — default model for MR section generation
  *   DEFAULT_TMR_MODEL — default model for TMR sub-table generation
@@ -47,6 +47,18 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     contextWindow: 128_000,
     supportsThinking: false,
     bestFor: "General-purpose drafts, good OpenAI reliability",
+  },
+  {
+    model: "claude-haiku-4-5",
+    provider: "anthropic",
+    displayName: "Claude Haiku 4.5",
+    tier: 1,
+    tierLabel: "Budget",
+    inputCostPerM: 1.00,
+    outputCostPerM: 5.00,
+    contextWindow: 200_000,
+    supportsThinking: false,
+    bestFor: "Fast and economical — well-structured English documents",
   },
 
   // ── Tier 2 — Mid-range ─────────────────────────────────────────────────────
@@ -98,6 +110,18 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     supportsThinking: true,
     bestFor: "Long-context tasks with thinking, cost-effective reasoning",
   },
+  {
+    model: "claude-sonnet-4-6",
+    provider: "anthropic",
+    displayName: "Claude Sonnet 4.6",
+    tier: 2,
+    tierLabel: "Mid-range",
+    inputCostPerM: 3.00,
+    outputCostPerM: 15.00,
+    contextWindow: 200_000,
+    supportsThinking: false,
+    bestFor: "Balanced quality and cost — strong multilingual narrative",
+  },
 
   // ── Tier 3 — Premium ───────────────────────────────────────────────────────
   {
@@ -125,16 +149,16 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     bestFor: "Very long documents, frontier reasoning, 2M context window",
   },
   {
-    model: "claude-opus-4-7",
+    model: "claude-opus-4-8",
     provider: "anthropic",
-    displayName: "Claude Opus 4.7",
+    displayName: "Claude Opus 4.8",
     tier: 3,
     tierLabel: "Premium",
-    inputCostPerM: 3.00,
-    outputCostPerM: 15.00,
+    inputCostPerM: 5.00,
+    outputCostPerM: 25.00,
     contextWindow: 200_000,
     supportsThinking: true,
-    bestFor: "Best narrative quality, nuanced evidence interpretation",
+    bestFor: "Highest quality — complex multilingual documents, difficult corpora",
   },
 
   // ── Azure — FAO enterprise ─────────────────────────────────────────────────

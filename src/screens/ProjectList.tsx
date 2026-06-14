@@ -12,8 +12,10 @@
 
 import { useState, type FC } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useProjects } from "../hooks/useProjects";
 import type { ProjectInfo, ToastMessage } from "../types/ui";
+import { COUNTRY_TO_ISO3 } from "../data/iso3";
 
 // ---------------------------------------------------------------------------
 // Helpers & constants for new project form
@@ -221,6 +223,9 @@ function EmptyState({
       >
         Change project folder
       </button>
+      <p className="text-xs text-gray-400 max-w-sm mt-3">
+        Projects will be stored in an &lsquo;AgCensus&rsquo; folder inside your chosen location.
+      </p>
     </div>
   );
 }
@@ -271,57 +276,6 @@ function ErrorState({
       >
         Retry
       </button>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Change-folder modal
-// ---------------------------------------------------------------------------
-
-function ChangeDirModal({
-  currentDir,
-  onSave,
-  onCancel,
-}: {
-  currentDir: string;
-  onSave: (dir: string) => void;
-  onCancel: () => void;
-}) {
-  const [value, setValue] = useState(currentDir);
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-1">
-          Project folder
-        </h2>
-        <p className="text-xs text-gray-500 mb-4">
-          Absolute path to the directory containing your AgCensus country
-          project subdirectories.
-        </p>
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23] mb-4"
-          placeholder="e.g. C:\Users\user\Documents\AgCensus"
-        />
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onSave(value.trim())}
-            disabled={!value.trim()}
-            className="px-4 py-2 text-sm bg-[#1B4F23] text-white rounded-lg hover:bg-[#163d1c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Save & reload
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -387,7 +341,20 @@ function NewProjectForm({
           <input
             type="text"
             value={form.country}
-            onChange={(e) => setField("country", e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              const iso3Found = COUNTRY_TO_ISO3[value.trim().toLowerCase()];
+              const currentYear = new Date().getFullYear().toString();
+              setForm((f) => ({
+                ...f,
+                country: value,
+                iso3: iso3Found && !f.iso3.trim() ? iso3Found : f.iso3,
+                censusName:
+                  value.trim() && !f.censusName.trim()
+                    ? `${value.trim()} Agricultural Census ${f.referenceYear || currentYear}`
+                    : f.censusName,
+              }));
+            }}
             placeholder="e.g. Pakistan"
             required
             className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
@@ -506,13 +473,22 @@ function NewProjectForm({
 const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
   const { projects, loading, error, baseDir, setBaseDir, refresh } =
     useProjects();
-  const [showChangeDirModal, setShowChangeDirModal] = useState(false);
   const [showNewProjectForm, setShowNewProjectForm] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  function handleSaveDir(dir: string) {
-    setBaseDir(dir);
-    setShowChangeDirModal(false);
+  async function handleChangeFolder() {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || typeof selected !== "string") return;
+    const parts = selected.replace(/\\/g, "/").split("/");
+    const leaf = parts[parts.length - 1];
+    let finalDir: string;
+    if (leaf === "AgCensus") {
+      finalDir = selected;
+    } else {
+      const sep = selected.includes("\\") ? "\\" : "/";
+      finalDir = `${selected.replace(/[/\\]+$/, "")}${sep}AgCensus`;
+    }
+    setBaseDir(finalDir);
   }
 
   async function handleCreateProject(data: NewProjectFormData) {
@@ -583,7 +559,7 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowChangeDirModal(true)}
+            onClick={() => void handleChangeFolder()}
             className="text-xs text-green-200 hover:text-white border border-green-700 hover:border-green-400 rounded px-2.5 py-1.5 transition-colors"
             title="Change project folder"
           >
@@ -642,14 +618,12 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
         ) : error ? (
           <ErrorState
             message={error}
-            onRetry={() => {
-              setShowChangeDirModal(true);
-            }}
+            onRetry={() => void handleChangeFolder()}
           />
         ) : projects.length === 0 ? (
           <EmptyState
             baseDir={baseDir}
-            onChangeDir={() => setShowChangeDirModal(true)}
+            onChangeDir={() => void handleChangeFolder()}
           />
         ) : (
           <>
@@ -671,14 +645,6 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
         )}
       </main>
 
-      {/* Change folder modal */}
-      {showChangeDirModal && (
-        <ChangeDirModal
-          currentDir={baseDir}
-          onSave={handleSaveDir}
-          onCancel={() => setShowChangeDirModal(false)}
-        />
-      )}
     </div>
   );
 };

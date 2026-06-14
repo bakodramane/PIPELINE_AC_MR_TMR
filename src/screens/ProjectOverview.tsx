@@ -303,9 +303,11 @@ function SourceRow({
 function SourcesTab({
   projectDir,
   onToast,
+  onSourcesCountChange,
 }: {
   projectDir: string;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
+  onSourcesCountChange?: (count: number) => void;
 }) {
   const [sources, setSources] = useState<SourceIndexEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -346,13 +348,15 @@ function SourcesTab({
       const list = JSON.parse(raw) as SourceIndexEntry[];
       setSources(list);
       setLoading(false);
+      onSourcesCountChange?.(list.length);
       return list;
     } catch {
       setSources([]);
       setLoading(false);
+      onSourcesCountChange?.(0);
       return [];
     }
-  }, [projectDir]);
+  }, [projectDir, onSourcesCountChange]);
 
   useEffect(() => {
     void loadSources();
@@ -787,6 +791,8 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
     tmrCellsTotal,
   } = project;
 
+  const [sourcesCount, setSourcesCount] = useState<number>(manifest.source_documents.length);
+
   const mrNotRun = mrSectionsTotal - mrSectionsOk;
   const tmrNotRun = tmrSubTablesTotal - tmrSubTablesOk;
 
@@ -929,15 +935,29 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
         {/* Navigation tabs + tab panel */}
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="border-b border-gray-200 px-2 flex gap-0 overflow-x-auto">
-            <NavTab label="MR draft" onClick={onOpenMrReview} />
-            <NavTab label="TMR draft" onClick={onOpenTmrReview} />
-            <NavTab
-              label="Sources"
-              active={activeTab === "sources"}
+            {/* Sources tab — first, styled with icon + badge */}
+            <button
               onClick={() =>
                 setActiveTab(activeTab === "sources" ? null : "sources")
               }
-            />
+              className={`px-4 py-3 text-sm border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                activeTab === "sources"
+                  ? "border-[#1B4F23] text-[#1B4F23] font-medium"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 bg-[#1B4F23]/5"
+              }`}
+            >
+              <span>📁</span>
+              <span>Sources</span>
+              {sourcesCount === 0 ? (
+                <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+              ) : (
+                <span className="text-[10px] text-green-600 font-semibold shrink-0">
+                  ✓{sourcesCount}
+                </span>
+              )}
+            </button>
+            <NavTab label="MR draft" onClick={onOpenMrReview} />
+            <NavTab label="TMR draft" onClick={onOpenTmrReview} />
             <NavTab
               label="Issues"
               onClick={() =>
@@ -948,7 +968,11 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
           </div>
 
           {activeTab === "sources" ? (
-            <SourcesTab projectDir={project.dir} onToast={onToast} />
+            <SourcesTab
+              projectDir={project.dir}
+              onToast={onToast}
+              onSourcesCountChange={setSourcesCount}
+            />
           ) : (
             <div className="px-6 py-8 text-center">
               <p className="text-sm text-gray-400">

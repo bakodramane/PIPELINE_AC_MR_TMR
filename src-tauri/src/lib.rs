@@ -706,10 +706,12 @@ async fn ingest_source(
         "--language".to_string(), language,
     ]);
 
-    let (mut rx, _child) = app
-        .shell()
-        .command(&node_cmd)
-        .args(&args)
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+    let mut cmd = app.shell().command(&node_cmd).args(&args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    let (mut rx, _child) = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn ingest process: {e}"))?;
 

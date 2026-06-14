@@ -619,6 +619,7 @@ const TmrReview: FC<TmrReviewProps> = ({
 }) => {
   const [subTables, setSubTables] = useState<SubTableInfo[]>([]);
   const [loadingCells, setLoadingCells] = useState(true);
+  const [sourcesCount, setSourcesCount] = useState<number | null>(null);
   const [expandedSubTable, setExpandedSubTable] = useState<number | null>(null);
   const [generatingAll, setGeneratingAll] = useState(false);
   const [generatingOne, setGeneratingOne] = useState<number | null>(null);
@@ -660,6 +661,17 @@ const TmrReview: FC<TmrReviewProps> = ({
     return () => {
       cancelled = true;
     };
+  }, [projectDir]);
+
+  // ── Load sources count ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    readTextFile(joinPath(projectDir, "sources", "_index.json"))
+      .then((raw) => {
+        const list = JSON.parse(raw) as unknown[];
+        setSourcesCount(list.length);
+      })
+      .catch(() => setSourcesCount(0));
   }, [projectDir]);
 
   // ── Load last TMR run timestamp from audit JSONL files ──────────────────
@@ -978,6 +990,17 @@ const TmrReview: FC<TmrReviewProps> = ({
           })()}
         </div>
       </div>
+
+      {/* No-sources banner */}
+      {sourcesCount === 0 && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5">
+          <div className="max-w-4xl mx-auto text-xs text-amber-800">
+            No source documents added yet. Go to the{" "}
+            <strong>Sources tab</strong> to add census PDFs or Excel files
+            before generating.
+          </div>
+        </div>
+      )}
 
       {/* Generation progress bar */}
       {generatingAll && genProgress && (
