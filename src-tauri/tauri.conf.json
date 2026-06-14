@@ -41,7 +41,7 @@
                                 "icons/icon.ico"
                             ],
                    "resources":  {
-                                     "../dist-scripts/**/*":  "dist-scripts/",
+                                     "../dist-scripts/":  "dist-scripts/",
                                      "../node_modules/tesseract.js/dist/tesseract.esm.min.js":  "node_modules/tesseract.js/dist/",
                                      "../node_modules/tesseract.js/dist/worker.min.js":  "node_modules/tesseract.js/dist/"
                                  },

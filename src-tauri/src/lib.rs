@@ -73,30 +73,51 @@ fn generator_paths() -> (PathBuf, PathBuf) {
 // Production-mode path helpers
 // ---------------------------------------------------------------------------
 
+/// True when `dir` is a complete dist-scripts directory: it must contain BOTH
+/// the `generate.mjs` bundle AND the `references/mr-prompt-v1.3.md` data file.
+///
+/// Requiring the data marker (not just the bundle) guards against installer
+/// layouts where the `.mjs` bundles ship but the `references/`, `mr-prompts/`,
+/// and `concepts/` subfolders are missing or flattened — which previously
+/// passed the bundle-only check and then crashed at generation time.
+fn is_complete_scripts_dir(dir: &Path) -> bool {
+    dir.join("generate.mjs").exists()
+        && dir
+            .join("references")
+            .join("mr-prompt-v1.3.md")
+            .exists()
+}
+
 /// Find the pre-compiled ESM bundle directory (production mode).
 ///
-/// Checks the Tauri resource directory for `dist-scripts/generate.mjs`.
+/// Probes every known installer/portable layout and returns the first
+/// candidate that is a *complete* dist-scripts tree (bundles + data files).
 /// Returns `Some(dir)` when running from an installed bundle, `None` in dev.
 fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
-    // Primary: Tauri resource_dir (installer bundles resources here)
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Tauri resource_dir — different bundlers / glob forms place dist-scripts
+    // at different sub-paths, so probe each variant:
+    //   <resource_dir>/dist-scripts            (object-map directory copy)
+    //   <resource_dir>/resources/dist-scripts  (some NSIS/MSI layouts)
+    //   <resource_dir>/_up_/dist-scripts       (list-form "../" traversal)
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let marker = resource_dir.join("dist-scripts").join("generate.mjs");
-        if marker.exists() {
-            return Some(resource_dir.join("dist-scripts"));
-        }
+        candidates.push(resource_dir.join("dist-scripts"));
+        candidates.push(resource_dir.join("resources").join("dist-scripts"));
+        candidates.push(resource_dir.join("_up_").join("dist-scripts"));
     }
 
-    // Fallback: directory next to the executable (portable layout)
+    // Portable layout: directory next to the executable.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            let marker = exe_dir.join("dist-scripts").join("generate.mjs");
-            if marker.exists() {
-                return Some(exe_dir.join("dist-scripts").to_path_buf());
-            }
+            candidates.push(exe_dir.join("dist-scripts"));
         }
     }
 
-    None // Dev mode — caller falls back to tsx invocation
+    candidates
+        .into_iter()
+        .find(|dir| is_complete_scripts_dir(dir))
+    // None → dev mode; caller falls back to tsx invocation.
 }
 
 /// Locate the Node.js binary on the current machine.
