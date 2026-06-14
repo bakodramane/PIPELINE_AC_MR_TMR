@@ -1,3 +1,18 @@
+// Polyfill browser globals that pdfjs-dist references at module load time.
+// Text extraction does not use them, but their absence crashes module init
+// in bundled production builds (dist-scripts/ingest.mjs) where @napi-rs/canvas
+// is not installed and Node cannot polyfill DOMMatrix automatically.
+// These shims must appear before any import that transitively loads pdfjs-dist.
+globalThis.DOMMatrix = globalThis.DOMMatrix || class DOMMatrix {
+  constructor() { return this; }
+};
+globalThis.ImageData = globalThis.ImageData || class ImageData {
+  constructor() { return this; }
+};
+globalThis.Path2D = globalThis.Path2D || class Path2D {
+  constructor() { return this; }
+};
+
 /**
  * AgCensus Compiler â€” PDF ingest CLI wrapper.
  *

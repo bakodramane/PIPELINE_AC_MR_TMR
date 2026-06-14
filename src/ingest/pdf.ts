@@ -1,29 +1,22 @@
 /**
  * PDF → PageJson[] parser.
  *
- * Primary path: pdf-parse v2 getText() for text PDFs.
- * Fallback path: tesseract.js OCR for pages whose extracted text is suspiciously
- *   short (< 100 characters), using pdf-parse v2 getScreenshot() to obtain the
- *   PNG buffer that tesseract needs — no separate canvas dependency required.
- *
- * Constraints:
- *  - All paths use path.join() — no hardcoded separators.
- *  - All file I/O uses fs/promises — no sync calls.
+ * Uses pdfjs-dist text extraction (getTextContent) — no canvas/rendering layer.
+ * pdfjs-dist is dynamically imported so its module-level initialisation code
+ * (which references browser globals like DOMMatrix) runs AFTER the host process
+ * has already installed the required shims, avoiding a startup crash in bundled
+ * production builds.
  */
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { PDFParse } from "pdf-parse";
 import type { PageJson } from "../project/schema";
 
-// Minimum character count below which we attempt OCR on a page.
+// Minimum character count below which we mark the page as low-confidence.
 const OCR_THRESHOLD = 100;
 
-// Confidence score assigned when OCR succeeded.
-const OCR_SUCCESS_CONFIDENCE_MAX = 0.68; // always below 0.7 per spec
-
-// Confidence score assigned when OCR was attempted but unavailable / failed.
-const OCR_UNAVAILABLE_CONFIDENCE = 0.40;
+// Confidence score for pages whose extracted text is suspiciously short.
+const OCR_UNAVAILABLE_CONFIDENCE = 0.4;
 
 // ---------------------------------------------------------------------------
 // Heading detection
@@ -50,34 +43,36 @@ function detectHeadings(text: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// OCR fallback
+// Text extraction via pdfjs-dist legacy build (no canvas / rendering)
 // ---------------------------------------------------------------------------
 
 /**
- * Attempt OCR on a single PDF page using tesseract.js.
+ * Extract text content page-by-page from a PDF buffer.
  *
- * Requires the page PNG buffer (obtained from pdf-parse getScreenshot).
- * Returns null if tesseract is unavailable or the call fails.
+ * Dynamic import delays pdfjs-dist initialisation until first call so the
+ * DOMMatrix/ImageData/Path2D shims installed by the entry script are already
+ * in place when pdfjs module-level code runs.
  */
-async function ocrPageBuffer(
-  pngBuffer: Uint8Array,
-): Promise<{ text: string; confidence: number } | null> {
-  try {
-    const { createWorker } = await import("tesseract.js");
-    const worker = await createWorker("eng", undefined, {
-      // Suppress verbose tesseract logging in non-debug environments
-      logger: () => undefined,
-      errorHandler: () => undefined,
-    });
-    const result = await worker.recognize(Buffer.from(pngBuffer));
-    await worker.terminate();
-    const confidence =
-      Math.min(result.data.confidence / 100, 1) * OCR_SUCCESS_CONFIDENCE_MAX;
-    return { text: result.data.text.trim(), confidence };
-  } catch {
-    // tesseract or language data unavailable
-    return null;
+async function extractTextByPage(buffer: Uint8Array): Promise<string[]> {
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const loadingTask = pdfjsLib.getDocument({
+    data: buffer,
+    disableFontFace: true,
+    useSystemFonts: false,
+    isEvalSupported: false,
+  });
+  const pdf = await loadingTask.promise;
+  const texts: string[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => ("str" in item ? (item as { str: string }).str : ""))
+      .join(" ");
+    texts.push(text);
   }
+  await pdf.destroy();
+  return texts;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,9 +82,9 @@ async function ocrPageBuffer(
 /**
  * Parse a PDF file and return one PageJson per page.
  *
- * @param pdfPath   Absolute or relative path to the PDF file.
+ * @param pdfPath      Absolute or relative path to the PDF file.
  * @param sourceDocId  The id that will become page_id prefix and source_doc.
- * @param language  BCP-47 language tag for the document (default "en").
+ * @param language     BCP-47 language tag for the document (default "en").
  */
 export async function parsePdf(
   pdfPath: string,
@@ -99,86 +94,30 @@ export async function parsePdf(
   const absPath = path.resolve(pdfPath);
   const buffer = await readFile(absPath);
 
-  const parser = new PDFParse({ data: buffer });
+  const pageTexts = await extractTextByPage(new Uint8Array(buffer));
+  const totalPages = pageTexts.length;
 
-  // 1. Extract text for all pages
-  const textResult = await parser.getText();
-  const totalPages = textResult.total as number;
-
-  // Build a map of page number → text
-  const pageTextMap = new Map<number, string>();
-  for (const p of textResult.pages as { num: number; text: string }[]) {
-    pageTextMap.set(p.num, p.text);
-  }
-
-  // Identify pages that need OCR (text too short)
-  const needOcr: number[] = [];
-  for (const [num, text] of pageTextMap) {
-    if (text.trim().length < OCR_THRESHOLD) needOcr.push(num);
-  }
-
-  // 2. Get screenshots only for pages needing OCR
-  const ocrResults = new Map<number, { text: string; confidence: number }>();
-
-  if (needOcr.length > 0) {
-    try {
-      const screenshots = await parser.getScreenshot({
-        partial: needOcr,
-      });
-      const pages = screenshots.pages as unknown as { num: number; data: Uint8Array }[];
-
-      // Process OCR sequentially to avoid spawning too many workers
-      for (const screenshotPage of pages) {
-        const ocr = await ocrPageBuffer(screenshotPage.data);
-        if (ocr) {
-          ocrResults.set(screenshotPage.num, ocr);
-        } else {
-          ocrResults.set(screenshotPage.num, {
-            text: pageTextMap.get(screenshotPage.num) ?? "",
-            confidence: OCR_UNAVAILABLE_CONFIDENCE,
-          });
-        }
-      }
-    } catch {
-      // getScreenshot unavailable (e.g., missing rendering support)
-      for (const num of needOcr) {
-        ocrResults.set(num, {
-          text: pageTextMap.get(num) ?? "",
-          confidence: OCR_UNAVAILABLE_CONFIDENCE,
-        });
-      }
-    }
-  }
-
-  await parser.destroy();
-
-  // 3. Assemble PageJson array, one entry per page
   const pages: PageJson[] = [];
   for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-    const rawText = pageTextMap.get(pageNum) ?? "";
+    const rawText = pageTexts[pageNum - 1] ?? "";
     const isShort = rawText.trim().length < OCR_THRESHOLD;
-
-    let finalText: string;
-
-    if (isShort && ocrResults.has(pageNum)) {
-      const ocr = ocrResults.get(pageNum)!;
-      finalText = ocr.text || rawText;
-    } else {
-      finalText = rawText;
-    }
 
     // Page id format: "{sourceDocId}-p{pageNum:04d}"
     const pageId = `${sourceDocId}-p${String(pageNum).padStart(4, "0")}`;
 
-    pages.push({
+    const page: PageJson = {
       page_id: pageId,
       source_doc: sourceDocId,
       page_number: pageNum,
-      text: finalText,
-      headings: detectHeadings(finalText),
+      text: rawText,
+      headings: detectHeadings(rawText),
       tables_on_page: [], // populated by the pipeline after table extraction
       language,
-    });
+    };
+    if (isShort) {
+      page.extraction_confidence = OCR_UNAVAILABLE_CONFIDENCE;
+    }
+    pages.push(page);
   }
 
   return pages;
