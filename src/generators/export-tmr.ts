@@ -22,7 +22,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as XLSX from "xlsx";
+import type * as XLSXTypes from "xlsx";
 import type { Manifest } from "../project/schema";
 
 // ---------------------------------------------------------------------------
@@ -96,6 +96,13 @@ export async function exportTmr(projectDir: string): Promise<string> {
   } catch {
     // _cells.json absent — every sub-table will be marked "not yet generated"
   }
+
+  // xlsx is CommonJS and calls require() internally; dynamic import defers
+  // its initialisation until after the entry script has installed the
+  // globalThis.require shim (createRequire), preventing a bundle-time crash.
+  const xlsxMod = await import("xlsx");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const XLSX = ((xlsxMod as any).default ?? xlsxMod) as typeof xlsxMod;
 
   // ── Build sheet data ─────────────────────────────────────────────────────
   const wb = XLSX.utils.book_new();
@@ -208,13 +215,13 @@ export async function exportTmr(projectDir: string): Promise<string> {
   // ── Apply cell styles ─────────────────────────────────────────────────────
   // SheetJS Community Edition (xlsx 0.18.x): styles via cell.s property.
   for (const addr of boldSet) {
-    const cell = ws[addr] as XLSX.CellObject | undefined;
+    const cell = ws[addr] as XLSXTypes.CellObject | undefined;
     if (!cell) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (cell as any).s = { ...((cell as any).s ?? {}), font: { bold: true } };
   }
   for (const addr of graySet) {
-    const cell = ws[addr] as XLSX.CellObject | undefined;
+    const cell = ws[addr] as XLSXTypes.CellObject | undefined;
     if (!cell) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (cell as any).s = {
@@ -223,7 +230,7 @@ export async function exportTmr(projectDir: string): Promise<string> {
     };
   }
   for (const addr of rightSet) {
-    const cell = ws[addr] as XLSX.CellObject | undefined;
+    const cell = ws[addr] as XLSXTypes.CellObject | undefined;
     if (!cell) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (cell as any).s = {

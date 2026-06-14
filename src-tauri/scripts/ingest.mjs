@@ -1,3 +1,11 @@
+// Provide a real CommonJS require() for xlsx (and other CJS packages bundled
+// into this file) so that their internal require('stream') / require('crypto')
+// calls resolve correctly.  esbuild's ESM output stubs require() to throw;
+// setting globalThis.require here lets the stub fall through to the real
+// resolver instead.  Must run before any lazy xlsx factory is invoked.
+import { createRequire as __cr } from "node:module";
+globalThis.require = globalThis.require || __cr(import.meta.url);
+
 // Polyfill browser globals that pdfjs-dist references at module load time.
 // Text extraction does not use them, but their absence crashes module init
 // in bundled production builds (dist-scripts/ingest.mjs) where @napi-rs/canvas

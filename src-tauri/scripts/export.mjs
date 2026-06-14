@@ -16,6 +16,12 @@
  * Always exits with code 0 — errors are communicated via stdout.
  */
 
+// Provide a real CommonJS require() for xlsx bundled into this file.
+// esbuild's ESM output stubs require() to throw; setting globalThis.require
+// here lets the stub fall through to the real resolver instead.
+import { createRequire as __cr } from "node:module";
+globalThis.require = globalThis.require || __cr(import.meta.url);
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";

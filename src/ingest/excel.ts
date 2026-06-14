@@ -15,7 +15,6 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import * as XLSX from "xlsx";
 import type { PageJson, TableJson, TableRow } from "../project/schema";
 
 // Excel is structured data → high, fixed confidence.
@@ -73,6 +72,13 @@ export async function parseExcel(
 ): Promise<{ pages: PageJson[]; tables: TableJson[] }> {
   const absPath = path.resolve(filePath);
   const buffer = await readFile(absPath);
+
+  // xlsx is CommonJS and calls require() internally; dynamic import defers
+  // its initialisation until after the entry script has installed the
+  // globalThis.require shim (createRequire), preventing a bundle-time crash.
+  const xlsxMod = await import("xlsx");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const XLSX = ((xlsxMod as any).default ?? xlsxMod) as typeof xlsxMod;
 
   const workbook = XLSX.read(buffer, { type: "buffer" });
 
