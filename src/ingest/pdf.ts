@@ -54,7 +54,25 @@ function detectHeadings(text: string): string[] {
  * in place when pdfjs module-level code runs.
  */
 async function extractTextByPage(buffer: Uint8Array): Promise<string[]> {
+  // pdfjs-dist v5 tries to spawn a Node worker_threads worker to parse the PDF.
+  // In a bundled environment the worker file (pdf.worker.mjs) does not exist
+  // alongside the bundle, which crashes with "Cannot find module pdf.worker.mjs".
+  //
+  // Importing pdf.worker.mjs first makes esbuild bundle the worker code inline
+  // and causes the worker to set globalThis.pdfjsWorker = { WorkerMessageHandler }.
+  // pdfjs then detects that handler via its #mainThreadWorkerMessageHandler getter
+  // (which reads globalThis.pdfjsWorker?.WorkerMessageHandler) and runs the PDF
+  // parser in the main thread instead of spawning a separate worker file.
+  await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+  // Belt-and-suspenders: clear workerSrc so the fallback path cannot resolve
+  // an external file even if #mainThreadWorkerMessageHandler check is bypassed.
+  if (pdfjsLib.GlobalWorkerOptions) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+  }
+
   const loadingTask = pdfjsLib.getDocument({
     data: buffer,
     disableFontFace: true,
