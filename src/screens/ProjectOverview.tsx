@@ -20,7 +20,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import type { ProjectInfo, ToastMessage } from "../types/ui";
 import type { SourceIndexEntry } from "../project/schema";
@@ -780,6 +780,35 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
   const [mrGenerating, setMrGenerating] = useState(false);
   const [tmrGenerating, setTmrGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>(null);
+  const [exportingBundle, setExportingBundle] = useState(false);
+
+  async function handleExportBundle() {
+    const folderName =
+      project.dir
+        .replace(/[/\\]+$/, "")
+        .split(/[/\\]/)
+        .pop() ?? "project";
+
+    const destPath = await save({
+      filters: [{ name: "Ag Census bundle", extensions: ["zip"] }],
+      defaultPath: `${folderName}.agcensus.zip`,
+    });
+    if (!destPath || typeof destPath !== "string") return;
+
+    setExportingBundle(true);
+    try {
+      const savedPath = await invoke<string>("export_bundle", {
+        projectDir: project.dir,
+        destPath,
+      });
+      const filename = savedPath.split(/[/\\]/).pop() ?? savedPath;
+      onToast(`Bundle exported: ${filename}`, "success");
+    } catch (err) {
+      onToast(`Export failed: ${String(err)}`, "error");
+    } finally {
+      setExportingBundle(false);
+    }
+  }
 
   const {
     manifest,
@@ -851,6 +880,21 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => void handleExportBundle()}
+              disabled={exportingBundle}
+              className="text-xs text-green-200 hover:text-white border border-green-700 hover:border-green-400 rounded px-2.5 py-1.5 transition-colors disabled:opacity-50 flex items-center gap-1"
+              title="Export project as a shareable bundle"
+            >
+              {exportingBundle ? (
+                <>
+                  <div className="w-2.5 h-2.5 border border-green-300 border-t-transparent rounded-full animate-spin" />
+                  Creating bundle…
+                </>
+              ) : (
+                "↓ Export bundle"
+              )}
+            </button>
             <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded font-mono">
               {manifest.country_iso3.toUpperCase()}
             </span>

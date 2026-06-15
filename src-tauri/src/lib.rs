@@ -1063,6 +1063,211 @@ fn delete_source(project_dir: String, doc_id: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Bundle helpers
+// ---------------------------------------------------------------------------
+
+/// Walk `dir` recursively, appending every regular file path to `result`.
+fn collect_files_recursive(
+    dir: &std::path::Path,
+    result: &mut Vec<std::path::PathBuf>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read '{}': {e}", dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, result)?;
+        } else {
+            result.push(path);
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Export bundle command
+// ---------------------------------------------------------------------------
+
+/// Zip the entire project directory into a single portable bundle file.
+///
+/// The archive stores entries as `<project-folder-name>/<relative-path>` so
+/// that importing recreates the project folder cleanly inside any base dir.
+/// Returns `Ok(dest_path)` on success.
+#[tauri::command]
+fn export_bundle(project_dir: String, dest_path: String) -> Result<String, String> {
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::path::Path;
+    use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
+
+    let project_path = Path::new(&project_dir);
+
+    // The project folder name becomes the top-level directory inside the zip.
+    let project_name = project_path
+        .file_name()
+        .ok_or_else(|| "Invalid project path — has no folder name".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    // Collect every file under the project directory.
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    collect_files_recursive(project_path, &mut files)?;
+
+    let dest_file = fs::File::create(&dest_path)
+        .map_err(|e| format!("Failed to create '{dest_path}': {e}"))?;
+
+    let mut zip = zip::ZipWriter::new(dest_file);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated);
+
+    for file_path in &files {
+        // Path relative to the project directory root.
+        let rel = file_path
+            .strip_prefix(project_path)
+            .map_err(|e| format!("Path strip error: {e}"))?;
+
+        // Entry name: "<project_name>/<relative>"  (forward slashes in zip)
+        let entry_name = format!(
+            "{}/{}",
+            project_name,
+            rel.to_string_lossy().replace('\\', "/")
+        );
+
+        zip.start_file(&entry_name, options)
+            .map_err(|e| format!("Failed to add '{entry_name}' to zip: {e}"))?;
+
+        let mut f = fs::File::open(file_path)
+            .map_err(|e| format!("Failed to open '{}': {e}", file_path.display()))?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read '{}': {e}", file_path.display()))?;
+        zip.write_all(&buf)
+            .map_err(|e| format!("Failed to write to zip: {e}"))?;
+    }
+
+    zip.finish()
+        .map_err(|e| format!("Failed to finalise zip: {e}"))?;
+
+    Ok(dest_path)
+}
+
+// ---------------------------------------------------------------------------
+// Import bundle command
+// ---------------------------------------------------------------------------
+
+/// Extract a project bundle zip into the AgCensus base directory.
+///
+/// Returns `Ok(project_folder_name)` on success.
+/// Returns `Err("EXISTS:<name>")` when the destination already exists and
+/// `overwrite` is false — the caller should prompt before retrying with
+/// `overwrite: true`.
+#[tauri::command]
+fn import_bundle(
+    bundle_path: String,
+    base_dir: String,
+    overwrite: bool,
+) -> Result<String, String> {
+    use std::fs;
+    use std::io::Read;
+    use std::path::Path;
+
+    let f = fs::File::open(&bundle_path)
+        .map_err(|e| format!("Failed to open bundle: {e}"))?;
+    let mut archive = zip::ZipArchive::new(f)
+        .map_err(|e| format!("Not a valid ZIP file: {e}"))?;
+
+    if archive.len() == 0 {
+        return Err("Bundle is empty".to_string());
+    }
+
+    // Pass 1: collect all entry names (ZipFile borrow drops at each iteration).
+    let mut entry_names: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        let file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
+        entry_names.push(file.name().to_string());
+    }
+
+    // Derive the project folder name from the first entry's top-level component.
+    let project_folder_name = {
+        let first = entry_names
+            .first()
+            .ok_or_else(|| "Bundle has no entries".to_string())?;
+        let top = first.split('/').next().unwrap_or("").trim().to_string();
+        if top.is_empty() {
+            return Err("Bundle has no top-level project directory".to_string());
+        }
+        top
+    };
+
+    // Validate: manifest.json must be present inside the bundle.
+    let manifest_entry = format!("{}/manifest.json", project_folder_name);
+    if !entry_names.iter().any(|n| n == &manifest_entry) {
+        return Err(
+            "Not a valid Ag Census project bundle — manifest.json not found".to_string(),
+        );
+    }
+
+    // Check whether the destination directory already exists.
+    let dest_dir = Path::new(&base_dir).join(&project_folder_name);
+    if dest_dir.exists() {
+        if !overwrite {
+            return Err(format!("EXISTS:{project_folder_name}"));
+        }
+        fs::remove_dir_all(&dest_dir)
+            .map_err(|e| format!("Failed to remove existing project: {e}"))?;
+    }
+
+    // Pass 2: extract all entries into base_dir.
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
+
+        let raw_name = file.name().replace('\\', "/");
+
+        // Reject path traversal attempts.
+        if raw_name.contains("..") {
+            return Err(format!(
+                "Security: rejected path traversal in entry '{raw_name}'"
+            ));
+        }
+
+        let out_path = Path::new(&base_dir).join(&raw_name);
+
+        if raw_name.ends_with('/') {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create directory: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent directory: {e}"))?;
+            }
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
+                .map_err(|e| format!("Failed to read zip entry: {e}"))?;
+            fs::write(&out_path, &buf)
+                .map_err(|e| format!("Failed to write '{}': {e}", out_path.display()))?;
+        }
+    }
+
+    // Validate the extracted manifest parses as JSON (detect corrupt bundles).
+    let manifest_path = dest_dir.join("manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).map_err(|e| {
+        let _ = fs::remove_dir_all(&dest_dir);
+        format!("Failed to read extracted manifest.json: {e}")
+    })?;
+    serde_json::from_str::<serde_json::Value>(&manifest_content).map_err(|e| {
+        let _ = fs::remove_dir_all(&dest_dir);
+        format!("Bundle is corrupt — manifest.json is not valid JSON: {e}")
+    })?;
+
+    Ok(project_folder_name)
+}
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
@@ -1079,6 +1284,8 @@ pub fn run() {
             ensure_base_dir,
             create_project,
             export_project,
+            export_bundle,
+            import_bundle,
             save_mr_section,
             approve_mr_section,
             open_path,

@@ -502,6 +502,11 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
     useProjects();
   const [showNewProjectForm, setShowNewProjectForm] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importConfirm, setImportConfirm] = useState<{ name: string } | null>(
+    null,
+  );
+  const pendingBundlePath = useRef<string | null>(null);
 
   async function handleChangeFolder() {
     const selected = await open({ directory: true, multiple: false });
@@ -567,6 +572,46 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
     }
   }
 
+  async function doImport(overwrite: boolean) {
+    const bundlePath = pendingBundlePath.current;
+    if (!bundlePath || !baseDir) return;
+    setImporting(true);
+    try {
+      const projectName = await invoke<string>("import_bundle", {
+        bundlePath,
+        baseDir,
+        overwrite,
+      });
+      setImportConfirm(null);
+      pendingBundlePath.current = null;
+      refresh();
+      onToast(`Project '${projectName}' imported successfully.`, "success");
+    } catch (err) {
+      const msg = String(err);
+      if (msg.startsWith("EXISTS:")) {
+        setImportConfirm({ name: msg.slice("EXISTS:".length) });
+      } else {
+        onToast(`Import failed: ${msg}`, "error");
+      }
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function handleImportBundle() {
+    if (!baseDir) {
+      onToast("Set a project folder first.", "warning");
+      return;
+    }
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Ag Census bundle", extensions: ["zip"] }],
+    });
+    if (!selected || typeof selected !== "string") return;
+    pendingBundlePath.current = selected;
+    await doImport(false);
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar */}
@@ -601,12 +646,18 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
             ↻ Refresh
           </button>
           <button
-            onClick={() =>
-              onToast("Import bundle is coming in a future session.", "info")
-            }
-            className="text-xs text-green-200 hover:text-white border border-green-700 hover:border-green-400 rounded px-2.5 py-1.5 transition-colors"
+            onClick={() => void handleImportBundle()}
+            disabled={importing}
+            className="text-xs text-green-200 hover:text-white border border-green-700 hover:border-green-400 rounded px-2.5 py-1.5 transition-colors disabled:opacity-50 flex items-center gap-1"
           >
-            Import bundle
+            {importing ? (
+              <>
+                <div className="w-2.5 h-2.5 border border-green-300 border-t-transparent rounded-full animate-spin" />
+                Importing…
+              </>
+            ) : (
+              "Import bundle"
+            )}
           </button>
           <button
             onClick={() => setShowNewProjectForm((v) => !v)}
@@ -672,6 +723,48 @@ const ProjectList: FC<ProjectListProps> = ({ onOpenProject, onToast }) => {
         )}
       </main>
 
+      {/* Overwrite confirmation overlay */}
+      {importConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Overwrite existing project?
+            </h2>
+            <p className="text-xs text-gray-600">
+              A project named{" "}
+              <strong>&ldquo;{importConfirm.name}&rdquo;</strong> already
+              exists. Overwrite it with the imported version? This cannot be
+              undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setImportConfirm(null);
+                  pendingBundlePath.current = null;
+                }}
+                disabled={importing}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void doImport(true)}
+                disabled={importing}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {importing ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Importing…
+                  </>
+                ) : (
+                  "Overwrite"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
