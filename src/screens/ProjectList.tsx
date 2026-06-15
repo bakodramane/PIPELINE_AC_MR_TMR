@@ -10,7 +10,7 @@
  * std::fs (no PowerShell WriteAllText BOM byte-order-mark issue).
  */
 
-import { useState, type FC } from "react";
+import { useState, useRef, type FC } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjects } from "../hooks/useProjects";
@@ -302,6 +302,11 @@ function NewProjectForm({
     statisticalUnit: "agricultural holding",
   });
 
+  // True once the user has directly typed into the census name field.
+  // Neither the country nor the year on-blur handler will ever overwrite a
+  // manually-edited census name.
+  const censusNameTouched = useRef(false);
+
   function setField(field: keyof NewProjectFormData, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
   }
@@ -333,21 +338,6 @@ function NewProjectForm({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-        {/* Reference year */}
-        <div>
-          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
-            Reference year
-          </label>
-          <input
-            type="text"
-            value={form.referenceYear}
-            onChange={(e) => setField("referenceYear", e.target.value)}
-            placeholder="e.g. 2024"
-            required
-            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
-          />
-        </div>
-
         {/* Country */}
         <div>
           <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
@@ -362,17 +352,15 @@ function NewProjectForm({
               if (!country) return;
               const iso3Found = COUNTRY_TO_ISO3[country.toLowerCase()];
               setForm((f) => {
-                const year =
-                  f.referenceYear.trim() ||
-                  new Date().getFullYear().toString();
-                return {
-                  ...f,
-                  iso3:
-                    iso3Found && !f.iso3.trim() ? iso3Found : f.iso3,
-                  censusName: !f.censusName.trim()
-                    ? `${country} Agricultural Census ${year}`
-                    : f.censusName,
-                };
+                const updates: Partial<NewProjectFormData> = {};
+                if (iso3Found && !f.iso3.trim()) updates.iso3 = iso3Found;
+                if (!censusNameTouched.current && !f.censusName.trim()) {
+                  const year =
+                    f.referenceYear.trim() ||
+                    new Date().getFullYear().toString();
+                  updates.censusName = `${country} Agricultural Census ${year}`;
+                }
+                return { ...f, ...updates };
               });
             }}
             placeholder="e.g. Pakistan"
@@ -394,6 +382,37 @@ function NewProjectForm({
             maxLength={3}
             required
             className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-mono uppercase focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
+          />
+        </div>
+
+        {/* Reference year */}
+        <div>
+          <label className="block text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+            Reference year
+          </label>
+          <input
+            type="text"
+            value={form.referenceYear}
+            onChange={(e) => setField("referenceYear", e.target.value)}
+            onBlur={(e) => {
+              const year = e.target.value.trim();
+              if (!year || censusNameTouched.current) return;
+              // Regenerate census name suggestion with the entered year if the
+              // user has not manually edited it. Handles the common case where
+              // the user fills Country first (getting a fallback-year suggestion)
+              // and then fills Year — the suggestion is updated to the real year.
+              setForm((f) => {
+                const country = f.country.trim();
+                if (!country) return f;
+                return {
+                  ...f,
+                  censusName: `${country} Agricultural Census ${year}`,
+                };
+              });
+            }}
+            placeholder="e.g. 2024"
+            required
+            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
           />
         </div>
 
@@ -423,7 +442,10 @@ function NewProjectForm({
           <input
             type="text"
             value={form.censusName}
-            onChange={(e) => setField("censusName", e.target.value)}
+            onChange={(e) => {
+              censusNameTouched.current = true;
+              setField("censusName", e.target.value);
+            }}
             placeholder="e.g. Pakistan Agricultural Census 2024"
             required
             className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1B4F23] focus:ring-1 focus:ring-[#1B4F23]"
