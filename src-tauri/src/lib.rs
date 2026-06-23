@@ -795,6 +795,52 @@ fn reset_tmr_subtable(project_dir: String, sub_table_number: u32) -> Result<(), 
 }
 
 // ---------------------------------------------------------------------------
+// Reset ALL MR sections command
+// ---------------------------------------------------------------------------
+
+/// Clear the entire `drafts/mr/_claims.json` to `{}`, reverting all sections
+/// to the "not generated" state.  A single audit event is appended.
+#[tauri::command]
+fn reset_all_mr(project_dir: String) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let claims_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("mr")
+        .join("_claims.json");
+
+    fs::write(&claims_path, b"{}")
+        .map_err(|e| format!("Failed to write _claims.json: {e}"))?;
+
+    append_audit_reset(&project_dir, "mr", "all");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reset ALL TMR sub-tables command
+// ---------------------------------------------------------------------------
+
+/// Clear the entire `drafts/tmr/_cells.json` to `{}`, reverting all sub-tables
+/// to the "not generated" state.  A single audit event is appended.
+#[tauri::command]
+fn reset_all_tmr(project_dir: String) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let cells_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("tmr")
+        .join("_cells.json");
+
+    fs::write(&cells_path, b"{}")
+        .map_err(|e| format!("Failed to write _cells.json: {e}"))?;
+
+    append_audit_reset(&project_dir, "tmr", "all");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Open path command
 // ---------------------------------------------------------------------------
 
@@ -1216,6 +1262,8 @@ pub fn run() {
             approve_mr_section,
             reset_mr_section,
             reset_tmr_subtable,
+            reset_all_mr,
+            reset_all_tmr,
             open_path,
             save_api_key,
             get_api_key,

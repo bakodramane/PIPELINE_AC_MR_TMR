@@ -691,6 +691,8 @@ const TmrReview: FC<TmrReviewProps> = ({
   } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [showCostConfirm, setShowCostConfirm] = useState(false);
+  const [showResetAllConfirm, setShowResetAllConfirm] = useState(false);
+  const [resettingAll, setResettingAll] = useState(false);
   // ISO 8601 timestamp of the most recent TMR generation run, or "" if none
   const [lastRunAt, setLastRunAt] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<Model>(
@@ -927,6 +929,38 @@ const TmrReview: FC<TmrReviewProps> = ({
     }
   }
 
+  // ── Reset all sub-tables ─────────────────────────────────────────────────
+
+  async function handleResetAll() {
+    setResettingAll(true);
+    try {
+      await invoke("reset_all_tmr", { projectDir });
+      // Rebuild all sub-tables to not_generated from the empty _cells.json
+      const emptySubTables: SubTableInfo[] = [];
+      for (let num = 1; num <= 23; num++) {
+        const spec = WCA_SUBTABLES[String(num)];
+        if (!spec) continue;
+        emptySubTables.push({
+          number: num,
+          title: spec.title,
+          status: "not_generated",
+          populatedCells: 0,
+          totalCells: spec.rows.length * Object.keys(spec.columns).length,
+          validationFlags: [],
+          truncatedWarning: false,
+          cells: {},
+        });
+      }
+      setSubTables(emptySubTables);
+      setShowResetAllConfirm(false);
+      onToast("All sub-tables reset.", "success");
+    } catch (err) {
+      onToast(`Reset all failed: ${String(err)}`, "error");
+    } finally {
+      setResettingAll(false);
+    }
+  }
+
   // ── Reset one sub-table ───────────────────────────────────────────────────
 
   async function handleResetSubTable(subTableNumber: number) {
@@ -1030,6 +1064,25 @@ const TmrReview: FC<TmrReviewProps> = ({
               </>
             ) : (
               <>↓ Export XLSX</>
+            )}
+          </button>
+          {/* Reset all — outline/muted style so it reads as secondary */}
+          <button
+            onClick={() => setShowResetAllConfirm(true)}
+            disabled={generatingAll || generatingOne !== null || resettingAll}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+              generatingAll || generatingOne !== null || resettingAll
+                ? "border-white/20 text-white/30 cursor-not-allowed"
+                : "border-red-400/60 text-red-200/80 hover:bg-red-900/30 hover:border-red-400"
+            }`}
+          >
+            {resettingAll ? (
+              <>
+                <div className="w-3 h-3 border border-red-300/40 border-t-transparent rounded-full animate-spin" />
+                Resetting…
+              </>
+            ) : (
+              <>↺ Reset all</>
             )}
           </button>
           <button
@@ -1270,6 +1323,44 @@ const TmrReview: FC<TmrReviewProps> = ({
           </div>
         );
       })()}
+
+      {/* Reset all confirmation dialog */}
+      {showResetAllConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Reset all sub-tables?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This removes every generated sub-table so you can regenerate from
+              scratch with a different model. This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowResetAllConfirm(false)}
+                disabled={resettingAll}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleResetAll()}
+                disabled={resettingAll}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {resettingAll ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  "Reset all sub-tables"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

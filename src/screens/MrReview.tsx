@@ -619,6 +619,8 @@ const MrReview: FC<MrReviewProps> = ({
     done: number;
     total: number;
   } | null>(null);
+  const [showResetAllConfirm, setShowResetAllConfirm] = useState(false);
+  const [resettingAll, setResettingAll] = useState(false);
   // null  → not exporting; "mr" | "mr-docx" | "mr-clean" | "mr-docx-clean"
   const [exportingType, setExportingType] = useState<string | null>(null);
   // ISO 8601 timestamp of the most recent MR generation run, or "" if none
@@ -884,6 +886,33 @@ const MrReview: FC<MrReviewProps> = ({
     }
   }
 
+  // ── Reset all sections ────────────────────────────────────────────────────
+
+  async function handleResetAll() {
+    setResettingAll(true);
+    try {
+      await invoke("reset_all_mr", { projectDir });
+      // Rebuild all sections to not_generated state from empty _claims.json
+      setSections(
+        Array.from({ length: MR_SECTIONS_TOTAL }, (_, idx) => ({
+          number: idx + 1,
+          title: MR_SECTION_TITLES[idx + 1] ?? `Section ${idx + 1}`,
+          status: "not_generated" as SectionStatus,
+          claimCount: 0,
+          claims: [],
+          truncatedWarning: false,
+          approved: false,
+        })),
+      );
+      setShowResetAllConfirm(false);
+      onToast("All sections reset.", "success");
+    } catch (err) {
+      onToast(`Reset all failed: ${String(err)}`, "error");
+    } finally {
+      setResettingAll(false);
+    }
+  }
+
   // ── Generate one section ──────────────────────────────────────────────────
 
   async function handleGenerateSection(n: number) {
@@ -989,10 +1018,29 @@ const MrReview: FC<MrReviewProps> = ({
               },
             )}
           </div>
+          {/* Reset all — outline/muted style so it reads as secondary */}
+          <button
+            onClick={() => setShowResetAllConfirm(true)}
+            disabled={generating || resettingAll || generatingSection !== null}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+              generating || resettingAll || generatingSection !== null
+                ? "border-white/20 text-white/30 cursor-not-allowed"
+                : "border-red-400/60 text-red-200/80 hover:bg-red-900/30 hover:border-red-400"
+            }`}
+          >
+            {resettingAll ? (
+              <>
+                <div className="w-3 h-3 border border-red-300/40 border-t-transparent rounded-full animate-spin" />
+                Resetting…
+              </>
+            ) : (
+              <>↺ Reset all</>
+            )}
+          </button>
           <button
             onClick={() => void handleGenerateAll()}
             disabled={generating}
-            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors ${
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
               generating
                 ? "border-green-600 text-green-300 cursor-not-allowed"
                 : "border-green-500 text-green-100 hover:bg-white/10 hover:border-green-300"
@@ -1173,6 +1221,44 @@ const MrReview: FC<MrReviewProps> = ({
           </div>
         )}
       </main>
+
+      {/* Reset all confirmation dialog */}
+      {showResetAllConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Reset all sections?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This removes every generated section so you can regenerate from
+              scratch with a different model. This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowResetAllConfirm(false)}
+                disabled={resettingAll}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleResetAll()}
+                disabled={resettingAll}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {resettingAll ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  "Reset all sections"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
