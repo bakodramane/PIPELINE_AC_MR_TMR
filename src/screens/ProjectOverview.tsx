@@ -325,6 +325,18 @@ function SourcesTab({
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Default language for this project — persisted in localStorage so it is
+  // remembered between sessions.  Applied to every file added to the queue.
+  const langKey = `agcensus_lang_default_${projectDir}`;
+  const [defaultLanguage, setDefaultLanguage] = useState<Language>(
+    () => (localStorage.getItem(langKey) as Language | null) ?? "en",
+  );
+
+  function handleDefaultLanguageChange(lang: Language) {
+    setDefaultLanguage(lang);
+    localStorage.setItem(langKey, lang);
+  }
+
   // Ref so the drag-drop event listener always sees current sources count
   const sourcesLengthRef = useRef(0);
   useEffect(() => {
@@ -375,10 +387,11 @@ function SourcesTab({
       const base = baseCount ?? sourcesLengthRef.current;
       const prefix = String(base + 1).padStart(2, "0");
       setDocId(`${prefix}-${sanitized}`);
-      setLanguage("en");
+      // Use the project default language instead of always "en"
+      setLanguage(defaultLanguage);
       setConfirmReplace(false);
     },
-    [],
+    [defaultLanguage],
   );
 
   // ── Enqueue selected/dropped files (filters to accepted extensions) ────────
@@ -614,6 +627,29 @@ function SourcesTab({
           No source documents indexed yet.
         </p>
       )}
+
+      {/* Default language selector — persisted per project */}
+      <div className="flex items-center gap-3 py-1">
+        <label className="text-xs text-gray-500 shrink-0">
+          Default language
+        </label>
+        <select
+          value={defaultLanguage}
+          onChange={(e) =>
+            handleDefaultLanguageChange(e.target.value as Language)
+          }
+          className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:border-[#1B4F23]"
+        >
+          {LANGUAGE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <span className="text-[11px] text-gray-400">
+          Pre-fills language for each file you add
+        </span>
+      </div>
 
       {/* Drop zone — hidden while showing the form or while indexing */}
       {!current && !indexing && (
