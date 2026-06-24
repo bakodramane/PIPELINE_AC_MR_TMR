@@ -470,6 +470,7 @@ function SubTableCard({
   isGenerating,
   onToggle,
   onGenerate,
+  onReset,
   onToast,
 }: {
   subTable: SubTableInfo;
@@ -477,9 +478,24 @@ function SubTableCard({
   isGenerating: boolean;
   onToggle: () => void;
   onGenerate: () => void;
+  onReset: () => Promise<void>;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
 }) {
   const hasContent = subTable.populatedCells > 0;
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  async function handleReset() {
+    setResetting(true);
+    try {
+      await onReset();
+      setResetConfirmOpen(false);
+    } catch (err) {
+      onToast(`Reset failed: ${String(err)}`, "error");
+    } finally {
+      setResetting(false);
+    }
+  }
 
   return (
     <div
@@ -566,7 +582,7 @@ function SubTableCard({
             <CellGrid subTable={subTable} />
           )}
 
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() =>
                 onToast("Cell editing is coming in a future session.", "info")
@@ -599,6 +615,52 @@ function SubTableCard({
             >
               ✓ Approve
             </button>
+            {/* Reset button — disabled when nothing generated yet */}
+            <button
+              onClick={() => setResetConfirmOpen(true)}
+              disabled={subTable.status === "not_generated" || resetting}
+              className="text-xs text-red-500 border border-red-200 rounded px-3 py-1.5 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ↺ Reset
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Reset confirmation overlay */}
+      {resetConfirmOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Reset T{subTable.number}?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This removes the generated content so you can regenerate it from
+              scratch. Other sub-tables are not affected.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setResetConfirmOpen(false)}
+                disabled={resetting}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleReset()}
+                disabled={resetting}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {resetting ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  "Reset sub-table"
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -628,6 +690,9 @@ const TmrReview: FC<TmrReviewProps> = ({
     total: number;
   } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [showCostConfirm, setShowCostConfirm] = useState(false);
+  const [showResetAllConfirm, setShowResetAllConfirm] = useState(false);
+  const [resettingAll, setResettingAll] = useState(false);
   // ISO 8601 timestamp of the most recent TMR generation run, or "" if none
   const [lastRunAt, setLastRunAt] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<Model>(
@@ -775,7 +840,19 @@ const TmrReview: FC<TmrReviewProps> = ({
 
   // ── Generate all sub-tables ───────────────────────────────────────────────
 
-  async function handleGenerateAll() {
+  // Cost guardrail: show a confirmation before generating all sub-tables
+  // with a model that costs >= $1/M input tokens (Mid-range+ expensive models).
+  function handleGenerateAllClick() {
+    const modelInfo = getModelInfo(selectedModel);
+    if (modelInfo && modelInfo.inputCostPerM >= 1.0) {
+      setShowCostConfirm(true);
+      return;
+    }
+    void proceedGenerateAll();
+  }
+
+  async function proceedGenerateAll() {
+    setShowCostConfirm(false);
     setGeneratingAll(true);
     setGenProgress({ done: 0, total: 23 });
 
@@ -852,6 +929,82 @@ const TmrReview: FC<TmrReviewProps> = ({
     }
   }
 
+  // ── Reset all sub-tables ─────────────────────────────────────────────────
+
+  async function handleResetAll() {
+    setResettingAll(true);
+    try {
+      await invoke("reset_all_tmr", { projectDir });
+      // Rebuild all sub-tables to not_generated from the empty _cells.json
+      const emptySubTables: SubTableInfo[] = [];
+      for (let num = 1; num <= 23; num++) {
+        const spec = WCA_SUBTABLES[String(num)];
+        if (!spec) continue;
+        emptySubTables.push({
+          number: num,
+          title: spec.title,
+          status: "not_generated",
+          populatedCells: 0,
+          totalCells: spec.rows.length * Object.keys(spec.columns).length,
+          validationFlags: [],
+          truncatedWarning: false,
+          cells: {},
+        });
+      }
+      setSubTables(emptySubTables);
+      setShowResetAllConfirm(false);
+      onToast("All sub-tables reset.", "success");
+    } catch (err) {
+      onToast(`Reset all failed: ${String(err)}`, "error");
+    } finally {
+      setResettingAll(false);
+    }
+  }
+
+  // ── Reset one sub-table ───────────────────────────────────────────────────
+
+  async function handleResetSubTable(subTableNumber: number) {
+    await invoke("reset_tmr_subtable", {
+      projectDir,
+      subTableNumber,
+    });
+    // Reload so the card shows "not generated" state
+    const cellsPath = [projectDir, "drafts", "tmr", "_cells.json"]
+      .map((p) => p.replace(/[/\\]+$/, ""))
+      .join("/");
+    const raw = await readTextFile(cellsPath);
+    const cellsJson = JSON.parse(raw) as Record<string, unknown>;
+    const spec = WCA_SUBTABLES[String(subTableNumber)];
+    if (!spec) return;
+    const rawEntry = cellsJson[`sub_table_${subTableNumber}`];
+    if (!rawEntry || typeof rawEntry !== "object") {
+      // Key was removed — set to not_generated
+      setSubTables((prev) =>
+        prev.map((st) =>
+          st.number === subTableNumber
+            ? {
+                ...st,
+                status: "not_generated" as const,
+                populatedCells: 0,
+                validationFlags: [],
+                truncatedWarning: false,
+                cells: {},
+              }
+            : st,
+        ),
+      );
+    } else {
+      const updated = parseSubTableEntry(
+        subTableNumber,
+        rawEntry as Record<string, unknown>,
+        spec,
+      );
+      setSubTables((prev) =>
+        prev.map((st) => (st.number === subTableNumber ? updated : st)),
+      );
+    }
+  }
+
   // ── Summary counts ────────────────────────────────────────────────────────
 
   const populatedCount = subTables.filter((s) => s.status === "populated").length;
@@ -913,8 +1066,27 @@ const TmrReview: FC<TmrReviewProps> = ({
               <>↓ Export XLSX</>
             )}
           </button>
+          {/* Reset all — outline/muted style so it reads as secondary */}
           <button
-            onClick={() => void handleGenerateAll()}
+            onClick={() => setShowResetAllConfirm(true)}
+            disabled={generatingAll || generatingOne !== null || resettingAll}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+              generatingAll || generatingOne !== null || resettingAll
+                ? "border-white/20 text-white/30 cursor-not-allowed"
+                : "border-red-400/60 text-red-200/80 hover:bg-red-900/30 hover:border-red-400"
+            }`}
+          >
+            {resettingAll ? (
+              <>
+                <div className="w-3 h-3 border border-red-300/40 border-t-transparent rounded-full animate-spin" />
+                Resetting…
+              </>
+            ) : (
+              <>↺ Reset all</>
+            )}
+          </button>
+          <button
+            onClick={handleGenerateAllClick}
             disabled={generatingAll || generatingOne !== null}
             className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
               generatingAll || generatingOne !== null
@@ -1086,7 +1258,7 @@ const TmrReview: FC<TmrReviewProps> = ({
                 isExpanded={expandedSubTable === st.number}
                 isGenerating={
                   generatingOne === st.number ||
-                  (generatingAll)
+                  generatingAll
                 }
                 onToggle={() =>
                   setExpandedSubTable(
@@ -1094,12 +1266,101 @@ const TmrReview: FC<TmrReviewProps> = ({
                   )
                 }
                 onGenerate={() => void handleGenerateOne(st.number)}
+                onReset={() => handleResetSubTable(st.number)}
                 onToast={onToast}
               />
             ))}
           </div>
         )}
       </main>
+
+      {/* Cost confirmation dialog — shown before generating all with an expensive model */}
+      {showCostConfirm && (() => {
+        const modelInfo = getModelInfo(selectedModel);
+        if (!modelInfo) return null;
+        // Estimate assumes the token-optimised evidence cap is in place (~9K in per sub-table).
+        // MULTI_ROW sub-tables will be higher; this is a conservative lower-bound estimate.
+        const estIn  = 23 * 9_000;
+        const estOut = 23 * 600;
+        const estCost =
+          (estIn * modelInfo.inputCostPerM + estOut * modelInfo.outputCostPerM) /
+          1_000_000;
+        return (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+              <h2 className="text-sm font-semibold text-gray-900">
+                Estimated cost: ~${estCost.toFixed(2)} or more
+              </h2>
+              <p className="text-xs text-gray-700">
+                Generating all 23 sub-tables with{" "}
+                <strong>{modelInfo.displayName}</strong> (${modelInfo.inputCostPerM.toFixed(2)}/M
+                input tokens) may cost approximately{" "}
+                <strong>${estCost.toFixed(2)}</strong> or more. Sub-tables with
+                many rows (livestock, crops) multiply cost by their row count.
+              </p>
+              <p className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <strong>Cost-saving tip:</strong> Use a Budget model (DeepSeek V4
+                Flash, Gemini 2.0 Flash) for the initial full run, review the
+                results, then regenerate only the weak sub-tables individually
+                with {modelInfo.displayName}. This cuts the full-run cost by 10–
+                50× while still getting premium quality where it matters.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowCostConfirm(false)}
+                  className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void proceedGenerateAll()}
+                  className="text-xs bg-amber-600 text-white rounded-lg px-4 py-2 hover:bg-amber-700 transition-colors"
+                >
+                  Continue (~${estCost.toFixed(2)}+)
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Reset all confirmation dialog */}
+      {showResetAllConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Reset all sub-tables?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This removes every generated sub-table so you can regenerate from
+              scratch with a different model. This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowResetAllConfirm(false)}
+                disabled={resettingAll}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleResetAll()}
+                disabled={resettingAll}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {resettingAll ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  "Reset all sub-tables"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

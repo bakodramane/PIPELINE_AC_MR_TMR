@@ -100,6 +100,31 @@ const SUB_TABLE_MAX_TOKENS: Record<number, number> = {
 };
 
 /**
+ * Maximum evidence pages sent per sub-table generation call.
+ *
+ * WHY 5: Mongolia pilot showed that 15 pages produced 27,000+ input tokens
+ * per call.  For MULTI_ROW sub-tables (4, 5, 7, 9, 13, 22, 23) the same
+ * pages are included in every row-level call, so ST-9 (48 rows) consumed
+ * 655,343 input tokens — roughly $2 at Claude Sonnet 4.6 pricing.
+ * Reducing to the 5 most-relevant pages cuts per-call evidence to ~9,000
+ * tokens and reduces multi-row totals by 3x.
+ */
+const MAX_EVIDENCE_PAGES_PER_CALL = 5;
+
+/**
+ * Hard ceiling on the total evidence page text (characters) sent per call.
+ * ~32,000 chars ≈ 8,000 tokens.  Pages are sorted most-relevant-first so the
+ * best evidence is never truncated.
+ */
+const MAX_EVIDENCE_CHARS = 32_000;
+
+/**
+ * Maximum evidence tables sent per sub-table generation call.
+ * Keeps the tables section proportional to the page reduction.
+ */
+const MAX_EVIDENCE_TABLES_PER_CALL = 5;
+
+/**
  * Evidence retrieval keywords per sub-table number.
  * Exported so the smoke test can verify entries exist for all supported
  * sub-table numbers without making any API calls.
@@ -547,15 +572,26 @@ async function retrieveEvidenceTables(
 // ---------------------------------------------------------------------------
 
 /**
- * Format evidence pages for the prompt.
+ * Format evidence pages for the prompt, with a hard character ceiling.
+ *
+ * Pages are included in relevance order (most relevant first).  When the
+ * combined text exceeds MAX_EVIDENCE_CHARS the block is truncated at that
+ * boundary so the most relevant pages are never cut.
  */
 function formatEvidencePageBlock(pages: PageJson[]): string {
   if (pages.length === 0) {
     return "(No matching evidence pages found.)";
   }
-  return pages
-    .map((p) => `[Page ${p.page_id}, p.${p.page_number}]\n${p.text}`)
-    .join("\n\n---\n\n");
+  const blocks = pages.map(
+    (p) => `[Page ${p.page_id}, p.${p.page_number}]\n${p.text}`,
+  );
+  let combined = blocks.join("\n\n---\n\n");
+  if (combined.length > MAX_EVIDENCE_CHARS) {
+    combined =
+      combined.slice(0, MAX_EVIDENCE_CHARS) +
+      "\n\n[… evidence truncated at cost-control ceiling …]";
+  }
+  return combined;
 }
 
 /**
@@ -825,11 +861,17 @@ export async function generateSubTable(
 
   // ── 2. Retrieve evidence (shared across all row calls) ────────────────────
   const keywords = SUBTABLE_KEYWORDS[subTableNumber] ?? [];
-  // 15 pages — some censuses spread a topic across multiple pages.
-  // mode 'tmr' adds numerical-density scoring so number-heavy pages surface
-  // even when keyword match fails (non-English census tables).
-  const pages = await retrieveEvidence(projectDir, keywords, 15, "tmr");
-  const evidenceTables = await retrieveEvidenceTables(projectDir, keywords);
+  // Use MAX_EVIDENCE_PAGES_PER_CALL (5) instead of 15.  For single-call
+  // sub-tables this saves ~18,000 tokens per call.  For MULTI_ROW sub-tables
+  // the same pages are re-sent on every row call, so the saving multiplies by
+  // the row count (up to 48× for ST-9).  The 5 most-relevant pages by score
+  // are always the best evidence; extra pages add noise more than signal.
+  const pages = await retrieveEvidence(
+    projectDir, keywords, MAX_EVIDENCE_PAGES_PER_CALL, "tmr",
+  );
+  const evidenceTables = await retrieveEvidenceTables(
+    projectDir, keywords, MAX_EVIDENCE_TABLES_PER_CALL,
+  );
 
   // Non-English / low-confidence detection: if any retrieved page is low
   // extraction confidence (< 0.8) or was returned as keyword-independent

@@ -78,6 +78,25 @@ The dropdown at the top-left of the MR and TMR screens lets you choose
 the AI model. DeepSeek V4 Flash is the default (cheapest, fastest).
 For complex or non-English documents, try Kimi K2.6 or Claude Opus 4.7.
 
+## Managing cost
+
+**Budget models** (DeepSeek V4 Flash, Gemini 2.0 Flash) cost a few cents
+for a full 23-sub-table TMR run and are a good starting point.
+
+**Premium models** (Claude Sonnet 4.6, Claude Opus 4.8, GPT-4o) can cost
+several dollars for a full 23-sub-table run because each sub-table sends
+multiple API calls, and some sub-tables (livestock, crops) have many rows.
+
+**Recommended workflow to keep costs low:**
+1. Select a Budget model and click "Generate all sub-tables".
+2. Review the results. Most sub-tables will populate correctly.
+3. For any sub-table that came out poorly, expand it, click "Generate sub-table"
+   with a Premium model selected — this regenerates only that one sub-table.
+4. Repeat for individual MR sections using "Generate" in the expanded section card.
+
+This way you pay Budget prices for the bulk of the work and Premium prices
+only for the few cells or sections that need more capable reasoning.
+
 ## Troubleshooting
 
 **Empty project list on first launch** — Normal. The Documents\AgCensus folder is

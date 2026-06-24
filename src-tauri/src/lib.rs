@@ -662,6 +662,185 @@ fn approve_mr_section(
 }
 
 // ---------------------------------------------------------------------------
+// Timestamp helper (no external crates required)
+// ---------------------------------------------------------------------------
+
+fn now_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let sec  = s % 60; s /= 60;
+    let min  = s % 60; s /= 60;
+    let hour = s % 24; s /= 24;
+
+    let mut year = 1970u32;
+    loop {
+        let dy: u64 = if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) { 366 } else { 365 };
+        if s < dy { break; }
+        s -= dy;
+        year += 1;
+    }
+    let leap = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0);
+    const DOM: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 0usize;
+    loop {
+        let dm: u64 = if month == 1 && leap { 29 } else { DOM[month] as u64 };
+        if s < dm { break; }
+        s -= dm;
+        if month == 11 { break; }
+        month += 1;
+    }
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month + 1, s + 1, hour, min, sec)
+}
+
+/// Append a "reset" event to today's audit JSONL file for the given project.
+fn append_audit_reset(project_dir: &str, target: &str, key: &str) {
+    use std::io::Write;
+    let timestamp = now_iso8601();
+    let date = timestamp[..10].to_string(); // "YYYY-MM-DD"
+    let audit_dir = std::path::Path::new(project_dir).join("audit");
+    let _ = std::fs::create_dir_all(&audit_dir);
+    let audit_path = audit_dir.join(format!("{date}-events.jsonl"));
+    let event = serde_json::json!({
+        "type": "reset",
+        "timestamp": timestamp,
+        "target": target,
+        "section_or_table": key,
+    });
+    let line = format!("{}\n", event);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reset MR section command
+// ---------------------------------------------------------------------------
+
+/// Remove one MR section's generated content from `drafts/mr/_claims.json`,
+/// reverting it to the "not generated" state without affecting other sections.
+#[tauri::command]
+fn reset_mr_section(project_dir: String, section_number: u32) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let claims_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("mr")
+        .join("_claims.json");
+
+    let raw = fs::read_to_string(&claims_path)
+        .map_err(|e| format!("Failed to read _claims.json: {e}"))?;
+
+    let mut all_claims: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse _claims.json: {e}"))?;
+
+    let key = format!("section_{section_number}");
+    if let Some(obj) = all_claims.as_object_mut() {
+        obj.remove(&key);
+    }
+
+    let updated = serde_json::to_string_pretty(&all_claims)
+        .map_err(|e| format!("Failed to serialize _claims.json: {e}"))?;
+
+    fs::write(&claims_path, updated.as_bytes())
+        .map_err(|e| format!("Failed to write _claims.json: {e}"))?;
+
+    append_audit_reset(&project_dir, "mr", &key);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reset TMR sub-table command
+// ---------------------------------------------------------------------------
+
+/// Remove one TMR sub-table's generated content from `drafts/tmr/_cells.json`,
+/// reverting it to the "not generated" state without affecting other sub-tables.
+#[tauri::command]
+fn reset_tmr_subtable(project_dir: String, sub_table_number: u32) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let cells_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("tmr")
+        .join("_cells.json");
+
+    let raw = fs::read_to_string(&cells_path)
+        .map_err(|e| format!("Failed to read _cells.json: {e}"))?;
+
+    let mut all_cells: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse _cells.json: {e}"))?;
+
+    let key = format!("sub_table_{sub_table_number}");
+    if let Some(obj) = all_cells.as_object_mut() {
+        obj.remove(&key);
+    }
+
+    let updated = serde_json::to_string_pretty(&all_cells)
+        .map_err(|e| format!("Failed to serialize _cells.json: {e}"))?;
+
+    fs::write(&cells_path, updated.as_bytes())
+        .map_err(|e| format!("Failed to write _cells.json: {e}"))?;
+
+    append_audit_reset(&project_dir, "tmr", &key);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reset ALL MR sections command
+// ---------------------------------------------------------------------------
+
+/// Clear the entire `drafts/mr/_claims.json` to `{}`, reverting all sections
+/// to the "not generated" state.  A single audit event is appended.
+#[tauri::command]
+fn reset_all_mr(project_dir: String) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let claims_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("mr")
+        .join("_claims.json");
+
+    fs::write(&claims_path, b"{}")
+        .map_err(|e| format!("Failed to write _claims.json: {e}"))?;
+
+    append_audit_reset(&project_dir, "mr", "all");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reset ALL TMR sub-tables command
+// ---------------------------------------------------------------------------
+
+/// Clear the entire `drafts/tmr/_cells.json` to `{}`, reverting all sub-tables
+/// to the "not generated" state.  A single audit event is appended.
+#[tauri::command]
+fn reset_all_tmr(project_dir: String) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let cells_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("tmr")
+        .join("_cells.json");
+
+    fs::write(&cells_path, b"{}")
+        .map_err(|e| format!("Failed to write _cells.json: {e}"))?;
+
+    append_audit_reset(&project_dir, "tmr", "all");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Open path command
 // ---------------------------------------------------------------------------
 
@@ -1288,6 +1467,10 @@ pub fn run() {
             import_bundle,
             save_mr_section,
             approve_mr_section,
+            reset_mr_section,
+            reset_tmr_subtable,
+            reset_all_mr,
+            reset_all_tmr,
             open_path,
             save_api_key,
             get_api_key,

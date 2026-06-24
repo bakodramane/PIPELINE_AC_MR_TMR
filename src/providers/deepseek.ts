@@ -37,15 +37,34 @@ export async function callDeepSeek(
   // V4-Pro disables thinking when disableThinking: true is passed by the caller
   // (e.g. TMR data-extraction, where reasoning traces consume budget without gain).
   // V4-Pro without the flag keeps thinking enabled — MR narrative generation benefits.
+  //
+  // IMPORTANT: When thinking is enabled on V4-Pro, thinking tokens count against
+  // max_tokens.  Without a thinking budget cap, the thinking trace fills the entire
+  // max_tokens allocation before the actual answer is written → parse_failed + truncated.
+  // Fix: (a) set an explicit thinking budget so thinking has its own cap, and
+  //      (b) add that budget to max_tokens so the answer still gets its full allocation.
+  const THINKING_BUDGET_TOKENS = 2_000;
+
   const thinkingParam =
     options.model === "deepseek-v4-flash" || options.disableThinking === true
       ? { thinking: { type: "disabled" } }
+      : options.model === "deepseek-v4-pro"
+      ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS } }
       : {};
+
+  // For V4-Pro with thinking enabled, total max_tokens must cover both the
+  // thinking trace (≤ THINKING_BUDGET_TOKENS) and the actual answer.
+  const isThinkingEnabled =
+    options.model === "deepseek-v4-pro" && options.disableThinking !== true;
+  const effectiveMaxTokens =
+    options.maxTokens !== undefined && isThinkingEnabled
+      ? options.maxTokens + THINKING_BUDGET_TOKENS
+      : options.maxTokens;
 
   const baseParams = {
     model: options.model,
     messages,
-    ...(options.maxTokens !== undefined && { max_tokens: options.maxTokens }),
+    ...(effectiveMaxTokens !== undefined && { max_tokens: effectiveMaxTokens }),
     ...(options.temperature !== undefined && {
       temperature: options.temperature,
     }),

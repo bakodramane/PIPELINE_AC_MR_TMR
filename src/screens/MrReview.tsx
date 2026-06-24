@@ -216,6 +216,10 @@ function SectionCard({
   projectDir,
   onSectionSaved,
   onSectionApproved,
+  onSectionReset,
+  onGenerate,
+  isGenerating,
+  isAnyGenerating,
 }: {
   section: SectionInfo;
   isExpanded: boolean;
@@ -224,11 +228,17 @@ function SectionCard({
   projectDir: string;
   onSectionSaved: (n: number) => Promise<void>;
   onSectionApproved: (n: number) => Promise<void>;
+  onSectionReset: (n: number) => Promise<void>;
+  onGenerate: () => void;
+  isGenerating: boolean;
+  isAnyGenerating: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [editClaims, setEditClaims] = useState<Claim[]>([]);
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const hasContent = section.claims.length > 0;
 
@@ -305,6 +315,23 @@ function SectionCard({
     }
   }
 
+  async function handleReset() {
+    setResetting(true);
+    try {
+      await invoke("reset_mr_section", {
+        projectDir,
+        sectionNumber: section.number,
+      });
+      await onSectionReset(section.number);
+      setResetConfirmOpen(false);
+      onToast(`§${section.number} reset.`, "success");
+    } catch (err) {
+      onToast(`Reset failed: ${String(err)}`, "error");
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <div
       className={`border rounded-lg overflow-hidden transition-shadow ${
@@ -333,6 +360,12 @@ function SectionCard({
             <span className="text-[11px] text-blue-600 font-medium">
               Editing
             </span>
+          )}
+          {isGenerating && !editing && (
+            <div
+              className="w-3 h-3 border border-[#1B4F23] border-t-transparent rounded-full animate-spin"
+              title="Generating…"
+            />
           )}
           {section.truncatedWarning && !editing && (
             <span
@@ -464,7 +497,7 @@ function SectionCard({
             </div>
           )}
 
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={enterEdit}
               className="text-xs text-gray-500 border border-gray-200 rounded px-3 py-1.5 hover:border-gray-300 hover:text-gray-700 transition-colors"
@@ -493,6 +526,71 @@ function SectionCard({
                 <>✓ Approve</>
               )}
             </button>
+            {/* Per-section generate button */}
+            <button
+              onClick={onGenerate}
+              disabled={isGenerating || isAnyGenerating}
+              className={`text-xs rounded px-3 py-1.5 transition-colors flex items-center gap-1.5 border ${
+                isGenerating || isAnyGenerating
+                  ? "border-[#1B4F23]/30 text-[#1B4F23]/30 cursor-not-allowed"
+                  : "border-[#1B4F23] text-[#1B4F23] hover:bg-[#1B4F23]/10"
+              }`}
+            >
+              {isGenerating ? (
+                <>
+                  <div className="w-2.5 h-2.5 border border-[#1B4F23]/40 border-t-transparent rounded-full animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>↻ Generate</>
+              )}
+            </button>
+            {/* Reset button — disabled when nothing generated yet */}
+            <button
+              onClick={() => setResetConfirmOpen(true)}
+              disabled={section.status === "not_generated" || resetting}
+              className="text-xs text-red-500 border border-red-200 rounded px-3 py-1.5 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ↺ Reset
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Reset confirmation overlay */}
+      {resetConfirmOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Reset §{section.number}?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This removes the generated content so you can regenerate it from
+              scratch. Other sections are not affected.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setResetConfirmOpen(false)}
+                disabled={resetting}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleReset()}
+                disabled={resetting}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {resetting ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  "Reset section"
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -516,10 +614,13 @@ const MrReview: FC<MrReviewProps> = ({
   const [sourcesCount, setSourcesCount] = useState<number | null>(null);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [generatingSection, setGeneratingSection] = useState<number | null>(null);
   const [genProgress, setGenProgress] = useState<{
     done: number;
     total: number;
   } | null>(null);
+  const [showResetAllConfirm, setShowResetAllConfirm] = useState(false);
+  const [resettingAll, setResettingAll] = useState(false);
   // null  → not exporting; "mr" | "mr-docx" | "mr-clean" | "mr-docx-clean"
   const [exportingType, setExportingType] = useState<string | null>(null);
   // ISO 8601 timestamp of the most recent MR generation run, or "" if none
@@ -785,6 +886,69 @@ const MrReview: FC<MrReviewProps> = ({
     }
   }
 
+  // ── Reset all sections ────────────────────────────────────────────────────
+
+  async function handleResetAll() {
+    setResettingAll(true);
+    try {
+      await invoke("reset_all_mr", { projectDir });
+      // Rebuild all sections to not_generated state from empty _claims.json
+      setSections(
+        Array.from({ length: MR_SECTIONS_TOTAL }, (_, idx) => ({
+          number: idx + 1,
+          title: MR_SECTION_TITLES[idx + 1] ?? `Section ${idx + 1}`,
+          status: "not_generated" as SectionStatus,
+          claimCount: 0,
+          claims: [],
+          truncatedWarning: false,
+          approved: false,
+        })),
+      );
+      setShowResetAllConfirm(false);
+      onToast("All sections reset.", "success");
+    } catch (err) {
+      onToast(`Reset all failed: ${String(err)}`, "error");
+    } finally {
+      setResettingAll(false);
+    }
+  }
+
+  // ── Generate one section ──────────────────────────────────────────────────
+
+  async function handleGenerateSection(n: number) {
+    setGeneratingSection(n);
+
+    const unlisten = await listen<GenerationProgressPayload>(
+      "generation-progress",
+      (event) => {
+        const { type, number, status, message } = event.payload;
+        if (type !== "mr" || number !== n) return;
+        if (status === "done") {
+          void reloadSection(number);
+        } else {
+          onToast(
+            `§${number} failed: ${message ?? "unknown error"}`,
+            "error",
+          );
+        }
+      },
+    );
+
+    try {
+      const result = await invoke<string>("generate_mr_sections", {
+        projectDir,
+        model: selectedModel,
+        section: n,
+      });
+      onToast(result, "success");
+    } catch (err) {
+      onToast(String(err), "error");
+    } finally {
+      unlisten();
+      setGeneratingSection(null);
+    }
+  }
+
   // ── Summary counts ────────────────────────────────────────────────────────
 
   const okCount = sections.filter((s) => s.status === "ok").length;
@@ -854,10 +1018,29 @@ const MrReview: FC<MrReviewProps> = ({
               },
             )}
           </div>
+          {/* Reset all — outline/muted style so it reads as secondary */}
+          <button
+            onClick={() => setShowResetAllConfirm(true)}
+            disabled={generating || resettingAll || generatingSection !== null}
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+              generating || resettingAll || generatingSection !== null
+                ? "border-white/20 text-white/30 cursor-not-allowed"
+                : "border-red-400/60 text-red-200/80 hover:bg-red-900/30 hover:border-red-400"
+            }`}
+          >
+            {resettingAll ? (
+              <>
+                <div className="w-3 h-3 border border-red-300/40 border-t-transparent rounded-full animate-spin" />
+                Resetting…
+              </>
+            ) : (
+              <>↺ Reset all</>
+            )}
+          </button>
           <button
             onClick={() => void handleGenerateAll()}
             disabled={generating}
-            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors ${
+            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
               generating
                 ? "border-green-600 text-green-300 cursor-not-allowed"
                 : "border-green-500 text-green-100 hover:bg-white/10 hover:border-green-300"
@@ -1029,11 +1212,53 @@ const MrReview: FC<MrReviewProps> = ({
                 projectDir={projectDir}
                 onSectionSaved={reloadSection}
                 onSectionApproved={reloadSection}
+                onSectionReset={reloadSection}
+                onGenerate={() => void handleGenerateSection(section.number)}
+                isGenerating={generatingSection === section.number}
+                isAnyGenerating={generating}
               />
             ))}
           </div>
         )}
       </main>
+
+      {/* Reset all confirmation dialog */}
+      {showResetAllConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Reset all sections?
+            </h2>
+            <p className="text-xs text-gray-600">
+              This removes every generated section so you can regenerate from
+              scratch with a different model. This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowResetAllConfirm(false)}
+                disabled={resettingAll}
+                className="text-xs border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleResetAll()}
+                disabled={resettingAll}
+                className="text-xs bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {resettingAll ? (
+                  <>
+                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  "Reset all sections"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
