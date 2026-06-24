@@ -615,6 +615,7 @@ const MrReview: FC<MrReviewProps> = ({
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generatingSection, setGeneratingSection] = useState<number | null>(null);
+  const stopRequestedRef = useRef(false);
   const [genProgress, setGenProgress] = useState<{
     done: number;
     total: number;
@@ -849,6 +850,7 @@ const MrReview: FC<MrReviewProps> = ({
   async function handleGenerateAll() {
     setGenerating(true);
     setGenProgress({ done: 0, total: MR_SECTIONS_TOTAL });
+    stopRequestedRef.current = false;
 
     // Set up listener BEFORE the loop so no events are missed.
     // Progress counter is driven by the loop, not by event count.
@@ -875,6 +877,8 @@ const MrReview: FC<MrReviewProps> = ({
 
     try {
       for (let n = 1; n <= MR_SECTIONS_TOTAL; n++) {
+        if (stopRequestedRef.current) break;
+
         try {
           await Promise.race([
             invoke<string>("generate_mr_sections", {
@@ -897,11 +901,13 @@ const MrReview: FC<MrReviewProps> = ({
         setGenProgress({ done: n, total: MR_SECTIONS_TOTAL });
       }
 
-      const msg =
-        timedOut > 0
-          ? `Generation complete — ${succeeded}/${MR_SECTIONS_TOTAL} processed, ${timedOut} timed out.`
-          : `Generation complete — ${succeeded}/${MR_SECTIONS_TOTAL} sections processed.`;
-      onToast(msg, timedOut > 0 ? "warning" : "success");
+      const stopped = stopRequestedRef.current;
+      const msg = stopped
+        ? `Generation stopped — ${succeeded}/${MR_SECTIONS_TOTAL} completed.`
+        : timedOut > 0
+        ? `Generation complete — ${succeeded}/${MR_SECTIONS_TOTAL} processed, ${timedOut} timed out.`
+        : `Generation complete — ${succeeded}/${MR_SECTIONS_TOTAL} sections processed.`;
+      onToast(msg, stopped ? "info" : timedOut > 0 ? "warning" : "success");
     } finally {
       unlisten();
       setGenerating(false);
@@ -1061,18 +1067,21 @@ const MrReview: FC<MrReviewProps> = ({
             )}
           </button>
           <button
-            onClick={() => void handleGenerateAll()}
-            disabled={generating}
+            onClick={generating
+              ? () => { stopRequestedRef.current = true; }
+              : () => void handleGenerateAll()
+            }
+            disabled={false}
             className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
               generating
-                ? "border-green-600 text-green-300 cursor-not-allowed"
+                ? "border-orange-400 text-orange-200 hover:bg-orange-900/30 cursor-pointer"
                 : "border-green-500 text-green-100 hover:bg-white/10 hover:border-green-300"
             }`}
           >
             {generating ? (
               <>
-                <div className="w-3 h-3 border border-green-300 border-t-transparent rounded-full animate-spin" />
-                Generating…
+                <div className="w-3 h-3 border border-orange-300 border-t-transparent rounded-full animate-spin" />
+                ■ Stop
               </>
             ) : (
               <>↻ Generate all sections</>

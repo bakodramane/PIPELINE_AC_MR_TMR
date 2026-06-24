@@ -16,7 +16,7 @@
  * back from Rust and each completed subtable reloads from disk in place.
  */
 
-import { useState, useEffect, useCallback, type FC } from "react";
+import { useState, useEffect, useCallback, useRef, type FC } from "react";
 import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -468,6 +468,7 @@ function SubTableCard({
   subTable,
   isExpanded,
   isGenerating,
+  isAnyGenerating,
   onToggle,
   onGenerate,
   onReset,
@@ -476,6 +477,7 @@ function SubTableCard({
   subTable: SubTableInfo;
   isExpanded: boolean;
   isGenerating: boolean;
+  isAnyGenerating: boolean;
   onToggle: () => void;
   onGenerate: () => void;
   onReset: () => Promise<void>;
@@ -593,9 +595,9 @@ function SubTableCard({
             </button>
             <button
               onClick={onGenerate}
-              disabled={isGenerating}
+              disabled={isGenerating || isAnyGenerating}
               className={`text-xs text-white rounded px-3 py-1.5 transition-colors flex items-center gap-1.5 ${
-                isGenerating
+                isGenerating || isAnyGenerating
                   ? "bg-blue-400 cursor-not-allowed"
                   : "bg-blue-600 hover:bg-blue-700"
               }`}
@@ -684,6 +686,8 @@ const TmrReview: FC<TmrReviewProps> = ({
   const [sourcesCount, setSourcesCount] = useState<number | null>(null);
   const [expandedSubTable, setExpandedSubTable] = useState<number | null>(null);
   const [generatingAll, setGeneratingAll] = useState(false);
+  const [currentlyGeneratingId, setCurrentlyGeneratingId] = useState<number | null>(null);
+  const stopRequestedRef = useRef(false);
   const [generatingOne, setGeneratingOne] = useState<number | null>(null);
   const [genProgress, setGenProgress] = useState<{
     done: number;
@@ -855,6 +859,7 @@ const TmrReview: FC<TmrReviewProps> = ({
     setShowCostConfirm(false);
     setGeneratingAll(true);
     setGenProgress({ done: 0, total: 23 });
+    stopRequestedRef.current = false;
 
     // Listen for per-subtable completion events to reload cards in place.
     // Progress counter is driven by the loop below, not by event count.
@@ -882,6 +887,9 @@ const TmrReview: FC<TmrReviewProps> = ({
 
     try {
       for (let n = 1; n <= 23; n++) {
+        if (stopRequestedRef.current) break;
+
+        setCurrentlyGeneratingId(n);
         try {
           await Promise.race([
             invoke<string>("generate_tmr_subtable", {
@@ -905,14 +913,17 @@ const TmrReview: FC<TmrReviewProps> = ({
         setGenProgress({ done: n, total: 23 });
       }
 
-      const msg =
-        timedOut > 0
-          ? `Generation complete — ${succeeded}/23 processed, ${timedOut} timed out.`
-          : `Generation complete — ${succeeded}/23 sub-tables processed.`;
-      onToast(msg, timedOut > 0 ? "warning" : "success");
+      const stopped = stopRequestedRef.current;
+      const msg = stopped
+        ? `Generation stopped — ${succeeded}/23 completed.`
+        : timedOut > 0
+        ? `Generation complete — ${succeeded}/23 processed, ${timedOut} timed out.`
+        : `Generation complete — ${succeeded}/23 sub-tables processed.`;
+      onToast(msg, stopped ? "info" : timedOut > 0 ? "warning" : "success");
     } finally {
       unlisten();
       setGeneratingAll(false);
+      setCurrentlyGeneratingId(null);
       setGenProgress(null);
     }
   }
@@ -1111,18 +1122,23 @@ const TmrReview: FC<TmrReviewProps> = ({
             )}
           </button>
           <button
-            onClick={handleGenerateAllClick}
-            disabled={generatingAll || generatingOne !== null}
+            onClick={generatingAll
+              ? () => { stopRequestedRef.current = true; }
+              : handleGenerateAllClick
+            }
+            disabled={!generatingAll && generatingOne !== null}
             className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
-              generatingAll || generatingOne !== null
+              generatingAll
+                ? "border-orange-400 text-orange-200 hover:bg-orange-900/30 cursor-pointer"
+                : generatingOne !== null
                 ? "border-green-600 text-green-300 cursor-not-allowed"
                 : "border-green-500 text-green-100 hover:bg-white/10 hover:border-green-300"
             }`}
           >
             {generatingAll ? (
               <>
-                <div className="w-3 h-3 border border-green-300 border-t-transparent rounded-full animate-spin" />
-                Generating…
+                <div className="w-3 h-3 border border-orange-300 border-t-transparent rounded-full animate-spin" />
+                ■ Stop
               </>
             ) : (
               <>↻ Generate all sub-tables</>
@@ -1283,8 +1299,9 @@ const TmrReview: FC<TmrReviewProps> = ({
                 isExpanded={expandedSubTable === st.number}
                 isGenerating={
                   generatingOne === st.number ||
-                  generatingAll
+                  currentlyGeneratingId === st.number
                 }
+                isAnyGenerating={generatingAll || generatingOne !== null}
                 onToggle={() =>
                   setExpandedSubTable(
                     expandedSubTable === st.number ? null : st.number,
