@@ -526,12 +526,15 @@ async fn export_project(
     export_type: String,
 ) -> Result<String, String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "export.mjs")?;
+    let resource_root: Option<String> = find_node_scripts_dir(&app)
+        .map(|d| d.to_string_lossy().into_owned());
     args.extend(["--project".to_string(), project_dir, "--type".to_string(), export_type]);
 
-    let (mut rx, _child) = app
-        .shell()
-        .command(&node_cmd)
-        .args(&args)
+    let mut cmd = app.shell().command(&node_cmd).args(&args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    let (mut rx, _child) = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn export: {e}"))?;
 

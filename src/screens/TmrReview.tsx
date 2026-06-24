@@ -856,12 +856,13 @@ const TmrReview: FC<TmrReviewProps> = ({
     setGeneratingAll(true);
     setGenProgress({ done: 0, total: 23 });
 
+    // Listen for per-subtable completion events to reload cards in place.
+    // Progress counter is driven by the loop below, not by event count.
     const unlisten = await listen<GenerationProgressPayload>(
       "generation-progress",
       (event) => {
         const { type, number, status, message } = event.payload;
         if (type !== "tmr") return;
-
         if (status === "done") {
           void reloadSubTable(number);
         } else {
@@ -870,21 +871,45 @@ const TmrReview: FC<TmrReviewProps> = ({
             "error",
           );
         }
-        setGenProgress((prev) =>
-          prev ? { ...prev, done: prev.done + 1 } : null,
-        );
       },
     );
 
+    // 5 minutes per sub-table — enough for a thinking-model row-per-call
+    // sub-table (e.g. ST-9 has 48 rows × ~3 s each = ~2.4 min).
+    const SUBTABLE_TIMEOUT_MS = 5 * 60 * 1_000;
+    let succeeded = 0;
+    let timedOut = 0;
+
     try {
-      const result = await invoke<string>("generate_tmr_subtable", {
-        projectDir,
-        subTableNumber: 0, // 0 = all
-        model: selectedModel,
-      });
-      onToast(`Generation complete — ${result}.`, "success");
-    } catch (err) {
-      onToast(String(err), "error");
+      for (let n = 1; n <= 23; n++) {
+        try {
+          await Promise.race([
+            invoke<string>("generate_tmr_subtable", {
+              projectDir,
+              subTableNumber: n,
+              model: selectedModel,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`timed out after 5 min`)),
+                SUBTABLE_TIMEOUT_MS,
+              ),
+            ),
+          ]);
+          succeeded++;
+        } catch (err) {
+          timedOut++;
+          onToast(`T${n}: ${String(err)}`, "error");
+        }
+        // Advance the progress bar after each attempt (success or timeout).
+        setGenProgress({ done: n, total: 23 });
+      }
+
+      const msg =
+        timedOut > 0
+          ? `Generation complete — ${succeeded}/23 processed, ${timedOut} timed out.`
+          : `Generation complete — ${succeeded}/23 sub-tables processed.`;
+      onToast(msg, timedOut > 0 ? "warning" : "success");
     } finally {
       unlisten();
       setGeneratingAll(false);

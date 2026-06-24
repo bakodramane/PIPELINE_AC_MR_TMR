@@ -31,8 +31,14 @@ import type { Manifest } from "../project/schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Production-mode resource root (see tmr.ts for details).
+// Injected by the Rust export_project command when running from a bundle.
+const RESOURCE_ROOT = process.env["AGCENSUS_RESOURCE_ROOT"] ?? null;
+
 /** WCA 2020 concept registry — same JSON consumed by tmr.ts. */
-const WCA_PATH = path.resolve(__dirname, "..", "concepts", "wca-2020.json");
+const WCA_PATH = RESOURCE_ROOT
+  ? path.join(RESOURCE_ROOT, "concepts", "wca-2020.json")
+  : path.resolve(__dirname, "..", "concepts", "wca-2020.json");
 
 // ---------------------------------------------------------------------------
 // Internal types

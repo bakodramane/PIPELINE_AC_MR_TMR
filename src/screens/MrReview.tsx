@@ -850,13 +850,13 @@ const MrReview: FC<MrReviewProps> = ({
     setGenerating(true);
     setGenProgress({ done: 0, total: MR_SECTIONS_TOTAL });
 
-    // Set up listener BEFORE invoking so no events are missed
+    // Set up listener BEFORE the loop so no events are missed.
+    // Progress counter is driven by the loop, not by event count.
     const unlisten = await listen<GenerationProgressPayload>(
       "generation-progress",
       (event) => {
         const { type, number, status, message } = event.payload;
         if (type !== "mr") return;
-
         if (status === "done") {
           void reloadSection(number);
         } else {
@@ -865,20 +865,43 @@ const MrReview: FC<MrReviewProps> = ({
             "error",
           );
         }
-        setGenProgress((prev) =>
-          prev ? { ...prev, done: prev.done + 1 } : null,
-        );
       },
     );
 
+    // 5 minutes per section — generous headroom for premium models.
+    const SECTION_TIMEOUT_MS = 5 * 60 * 1_000;
+    let succeeded = 0;
+    let timedOut = 0;
+
     try {
-      const result = await invoke<string>("generate_mr_sections", {
-        projectDir,
-        model: selectedModel,
-      });
-      onToast(`Generation complete — ${result}.`, "success");
-    } catch (err) {
-      onToast(String(err), "error");
+      for (let n = 1; n <= MR_SECTIONS_TOTAL; n++) {
+        try {
+          await Promise.race([
+            invoke<string>("generate_mr_sections", {
+              projectDir,
+              section: n,
+              model: selectedModel,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`timed out after 5 min`)),
+                SECTION_TIMEOUT_MS,
+              ),
+            ),
+          ]);
+          succeeded++;
+        } catch (err) {
+          timedOut++;
+          onToast(`§${n}: ${String(err)}`, "error");
+        }
+        setGenProgress({ done: n, total: MR_SECTIONS_TOTAL });
+      }
+
+      const msg =
+        timedOut > 0
+          ? `Generation complete — ${succeeded}/${MR_SECTIONS_TOTAL} processed, ${timedOut} timed out.`
+          : `Generation complete — ${succeeded}/${MR_SECTIONS_TOTAL} sections processed.`;
+      onToast(msg, timedOut > 0 ? "warning" : "success");
     } finally {
       unlisten();
       setGenerating(false);
