@@ -176,32 +176,61 @@ fn find_node_binary() -> Option<PathBuf> {
     None
 }
 
+/// Locate node.exe in the portable layout: the single directory that contains
+/// the running executable.
+///
+/// Portable builds ship a self-contained `node.exe` next to the `.exe` so the
+/// app can run on machines that have no system-wide Node installation and no
+/// PATH entry for Node.  This helper returns `Some(path)` when that bundled
+/// binary exists, `None` otherwise.
+///
+/// The path may contain spaces (e.g. a user's `Documents\My Apps\` folder).
+/// `app.shell().command(path)` ultimately calls `std::process::Command::new(path)`
+/// which passes the program path as a separate OS-level token (quoted in
+/// lpCommandLine on Windows), so spaces in the path are handled correctly.
+fn find_portable_node() -> Option<PathBuf> {
+    let exe_path = std::env::current_exe().ok()?;
+    let exe_dir  = exe_path.parent()?;
+    let node_exe = exe_dir.join("node.exe");
+    node_exe.exists().then_some(node_exe)
+}
+
 /// Resolve how to invoke a sidecar script: production bundle or dev tsx.
 ///
-/// Returns `(node_binary, leading_args)` where leading_args contains the
-/// bundle path (prod) or [tsx_cli, script_path] (dev).
+/// Returns `(node_cmd, leading_args)` where `leading_args` is the
+/// bundle path alone (prod) or `[tsx_cli, script_path]` (dev).
 ///
-/// We always invoke Node as `"node"` (PATH-resolved) rather than using
-/// the absolute path returned by `find_node_binary()`.  On Windows,
-/// absolute paths such as `C:\Program Files\nodejs\node.exe` contain a
-/// space; when CreateProcessW receives that as the first lpCommandLine
-/// token without a surrounding application-level quote, the whitespace-
-/// delimited prefix `C:` lands as `process.argv[1]` instead of the
-/// script path, producing the EISDIR error at resolveMainPath.  Using
-/// the bare name lets the OS resolve it through PATH, which the Node
-/// installer always configures correctly.
+/// Node resolution priority (production mode only):
+///  1. Portable: a `node.exe` bundled next to the app executable is used as-is.
+///     Its full absolute path is passed to `app.shell().command()`, which
+///     routes through `std::process::Command::new()` — the program and each
+///     argument are passed as discrete OS values, never concatenated into a
+///     command string, so spaces in the path are safe.
+///  2. Installed: `"node"` is resolved through PATH.  This avoids embedding an
+///     absolute path such as `C:\Program Files\nodejs\node.exe`; a space-
+///     containing path in the first lpCommandLine token can make the whitespace-
+///     delimited prefix `C:` land as process.argv[1] instead of the script
+///     path, producing the EISDIR crash at resolveMainPath.
 fn resolve_invocation(
     app: &tauri::AppHandle,
     script_name: &str,
 ) -> Result<(String, Vec<String>), String> {
     if let Some(scripts_dir) = find_node_scripts_dir(app) {
-        // Production: node dist-scripts/<stem>.mjs [args]
+        // Production: run the pre-compiled bundle directly with node.
         let stem = Path::new(script_name)
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy();
         let bundle = scripts_dir.join(format!("{stem}.mjs"));
-        Ok(("node".to_string(), vec![bundle.to_string_lossy().into_owned()]))
+
+        // Portable build: bundled node.exe takes priority over PATH.
+        // Installed build: use PATH-resolved "node" to avoid a space-
+        // containing absolute path becoming the first lpCommandLine token.
+        let node_cmd = find_portable_node()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "node".to_string());
+
+        Ok((node_cmd, vec![bundle.to_string_lossy().into_owned()]))
     } else {
         // Dev: node tsx_cli script_path [args]
         let (tsx_cli, _) = generator_paths();
@@ -456,10 +485,6 @@ async fn generate_tmr_subtable(
         ]);
         1
     };
-
-    eprintln!("GENERATE_CMD node_bin={:?}", node_cmd);
-    eprintln!("GENERATE_CMD script={:?}", args.first().unwrap_or(&String::new()));
-    eprintln!("GENERATE_CMD args={:#?}", args);
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
@@ -925,10 +950,6 @@ async fn ingest_source(
         "--language".to_string(),
         language,
     ]);
-
-    eprintln!("INGEST_CMD node_bin={:?}", node_cmd);
-    eprintln!("INGEST_CMD script={:?}", args.first().unwrap_or(&String::new()));
-    eprintln!("INGEST_CMD args={:#?}", args);
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
