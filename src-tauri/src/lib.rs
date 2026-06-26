@@ -88,12 +88,39 @@ fn is_complete_scripts_dir(dir: &Path) -> bool {
             .exists()
 }
 
+/// True only when this is a genuine installed/portable *release* build.
+///
+/// `cfg!(debug_assertions)` is the single reliable dev-vs-production signal:
+///   • `npm run tauri:dev` / `cargo run` always compile a **debug** binary.
+///   • `tauri build` (installer + portable) always compiles a **release** binary.
+///
+/// Detecting production by "a `dist-scripts/` folder exists" was the bug: on the
+/// dev machine `npm run build:scripts` leaves a `dist-scripts/` at the project
+/// root, which could flip path resolution into the production branch even though
+/// the app is running under `tauri:dev` with no bundled `node.exe` — producing a
+/// broken node command.  Keying off the build profile makes the dev machine
+/// never fall into the production branch, regardless of stray folders.
+fn is_production_build() -> bool {
+    !cfg!(debug_assertions)
+}
+
 /// Find the pre-compiled ESM bundle directory (production mode).
 ///
 /// Probes every known installer/portable layout and returns the first
 /// candidate that is a *complete* dist-scripts tree (bundles + data files).
 /// Returns `Some(dir)` when running from an installed bundle, `None` in dev.
+///
+/// In a debug build (dev) this always returns `None` so the caller uses the tsx
+/// invocation, even if a `dist-scripts/` folder happens to exist at the cwd or
+/// next to the debug binary.
 fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if !is_production_build() {
+        if cfg!(debug_assertions) {
+            eprintln!("[resolve] debug build → dev mode, find_node_scripts_dir → None");
+        }
+        return None;
+    }
+
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // Tauri resource_dir — different bundlers / glob forms place dist-scripts
@@ -114,9 +141,23 @@ fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 
-    candidates
+    let chosen = candidates
         .into_iter()
-        .find(|dir| is_complete_scripts_dir(dir))
+        .find(|dir| is_complete_scripts_dir(dir));
+
+    if cfg!(debug_assertions) {
+        match &chosen {
+            Some(dir) => eprintln!(
+                "[resolve] find_node_scripts_dir → complete dist-scripts at {}",
+                dir.display()
+            ),
+            None => eprintln!(
+                "[resolve] find_node_scripts_dir → None (no complete dist-scripts found)"
+            ),
+        }
+    }
+
+    chosen
     // None → dev mode; caller falls back to tsx invocation.
 }
 
@@ -192,7 +233,20 @@ fn find_portable_node() -> Option<PathBuf> {
     let exe_path = std::env::current_exe().ok()?;
     let exe_dir  = exe_path.parent()?;
     let node_exe = exe_dir.join("node.exe");
-    node_exe.exists().then_some(node_exe)
+    let found = node_exe.exists().then_some(node_exe);
+
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[resolve] current_exe = {}",
+            exe_path.display()
+        );
+        match &found {
+            Some(p) => eprintln!("[resolve] find_portable_node → {}", p.display()),
+            None => eprintln!("[resolve] find_portable_node → None (no node.exe next to exe)"),
+        }
+    }
+
+    found
 }
 
 /// Resolve how to invoke a sidecar script: production bundle or dev tsx.
@@ -215,7 +269,7 @@ fn resolve_invocation(
     app: &tauri::AppHandle,
     script_name: &str,
 ) -> Result<(String, Vec<String>), String> {
-    if let Some(scripts_dir) = find_node_scripts_dir(app) {
+    let resolved = if let Some(scripts_dir) = find_node_scripts_dir(app) {
         // Production: run the pre-compiled bundle directly with node.
         let stem = Path::new(script_name)
             .file_stem()
@@ -230,20 +284,36 @@ fn resolve_invocation(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "node".to_string());
 
-        Ok((node_cmd, vec![bundle.to_string_lossy().into_owned()]))
+        if cfg!(debug_assertions) {
+            eprintln!("[resolve] branch = PRODUCTION (bundle) for {script_name}");
+        }
+        (node_cmd, vec![bundle.to_string_lossy().into_owned()])
     } else {
         // Dev: node tsx_cli script_path [args]
         let (tsx_cli, _) = generator_paths();
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let script   = manifest.join("scripts").join(script_name);
-        Ok((
+
+        if cfg!(debug_assertions) {
+            eprintln!("[resolve] branch = DEV (tsx) for {script_name}");
+        }
+        (
             "node".to_string(),
             vec![
                 tsx_cli.to_string_lossy().into_owned(),
                 script.to_string_lossy().into_owned(),
             ],
-        ))
+        )
+    };
+
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[resolve] node_cmd = {:?}\n[resolve] leading_args = {:?}",
+            resolved.0, resolved.1
+        );
     }
+
+    Ok(resolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -562,12 +632,21 @@ async fn export_project(
     export_type: String,
 ) -> Result<String, String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "export.mjs")?;
+
+    // AGCENSUS_RESOURCE_ROOT must be injected here exactly as in
+    // generate_mr_sections / generate_tmr_subtable / ingest_source so the
+    // bundled export script (which inlines export-tmr.ts) locates
+    // concepts/wca-2020.json under <dist-scripts>/concepts/ instead of the
+    // wrong __dirname-relative `../concepts` (= install root) path.
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+
     args.extend(["--project".to_string(), project_dir, "--type".to_string(), export_type]);
 
-    let (mut rx, _child) = app
-        .shell()
-        .command(&node_cmd)
-        .args(&args)
+    let mut cmd = app.shell().command(&node_cmd).args(&args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    let (mut rx, _child) = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn export: {e}"))?;
 
@@ -950,6 +1029,13 @@ async fn ingest_source(
         "--language".to_string(),
         language,
     ]);
+
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[ingest] SPAWN node_cmd = {:?}\n[ingest] SPAWN args = {:?}\n[ingest] AGCENSUS_RESOURCE_ROOT = {:?}",
+            node_cmd, args, resource_root
+        );
+    }
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
