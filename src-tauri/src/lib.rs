@@ -888,8 +888,11 @@ fn copy_source_file(
 
 /// Run the ingest pipeline for one PDF source document.
 ///
-/// Spawns the ingest sidecar and streams progress events ("ingest-progress")
-/// back to the frontend.
+/// Spawns `node ingest.mjs` (production: bundled ESM; dev: via tsx) and
+/// streams `ingest-progress` events back to the frontend.
+///
+/// Command construction mirrors `generate_tmr_subtable` exactly so that
+/// Windows drive-letter paths are never split across arguments.
 #[tauri::command]
 async fn ingest_source(
     app: tauri::AppHandle,
@@ -899,14 +902,19 @@ async fn ingest_source(
     language: String,
 ) -> Result<(), String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "ingest.mjs")?;
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+
     args.extend([
-        "--project".to_string(), project_dir,
-        "--doc-id".to_string(),  doc_id.clone(),
-        "--file".to_string(),    file_path,
-        "--language".to_string(), language,
+        "--project".to_string(),
+        project_dir,
+        "--doc-id".to_string(),
+        doc_id.clone(),
+        "--file".to_string(),
+        file_path,
+        "--language".to_string(),
+        language,
     ]);
 
-    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
         cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
