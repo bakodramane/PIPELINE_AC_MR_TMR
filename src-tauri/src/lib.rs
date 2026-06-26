@@ -180,6 +180,16 @@ fn find_node_binary() -> Option<PathBuf> {
 ///
 /// Returns `(node_binary, leading_args)` where leading_args contains the
 /// bundle path (prod) or [tsx_cli, script_path] (dev).
+///
+/// We always invoke Node as `"node"` (PATH-resolved) rather than using
+/// the absolute path returned by `find_node_binary()`.  On Windows,
+/// absolute paths such as `C:\Program Files\nodejs\node.exe` contain a
+/// space; when CreateProcessW receives that as the first lpCommandLine
+/// token without a surrounding application-level quote, the whitespace-
+/// delimited prefix `C:` lands as `process.argv[1]` instead of the
+/// script path, producing the EISDIR error at resolveMainPath.  Using
+/// the bare name lets the OS resolve it through PATH, which the Node
+/// installer always configures correctly.
 fn resolve_invocation(
     app: &tauri::AppHandle,
     script_name: &str,
@@ -191,10 +201,7 @@ fn resolve_invocation(
             .unwrap_or_default()
             .to_string_lossy();
         let bundle = scripts_dir.join(format!("{stem}.mjs"));
-        let node = find_node_binary()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "node".to_string());
-        Ok((node, vec![bundle.to_string_lossy().into_owned()]))
+        Ok(("node".to_string(), vec![bundle.to_string_lossy().into_owned()]))
     } else {
         // Dev: node tsx_cli script_path [args]
         let (tsx_cli, _) = generator_paths();
@@ -449,6 +456,10 @@ async fn generate_tmr_subtable(
         ]);
         1
     };
+
+    eprintln!("GENERATE_CMD node_bin={:?}", node_cmd);
+    eprintln!("GENERATE_CMD script={:?}", args.first().unwrap_or(&String::new()));
+    eprintln!("GENERATE_CMD args={:#?}", args);
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
@@ -914,6 +925,10 @@ async fn ingest_source(
         "--language".to_string(),
         language,
     ]);
+
+    eprintln!("INGEST_CMD node_bin={:?}", node_cmd);
+    eprintln!("INGEST_CMD script={:?}", args.first().unwrap_or(&String::new()));
+    eprintln!("INGEST_CMD args={:#?}", args);
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
