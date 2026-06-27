@@ -249,6 +249,100 @@ fn find_portable_node() -> Option<PathBuf> {
     found
 }
 
+/// True when `node` is resolvable through the system PATH.
+///
+/// Used to preserve the working installed-build behaviour on machines that
+/// already have Node on PATH: those keep launching the bare `"node"` command
+/// (never an absolute path), so a space-containing install path can never
+/// become the first lpCommandLine token.  Only when PATH has no node do we
+/// fall back to a bundled / probed absolute path.
+fn node_on_path() -> bool {
+    #[cfg(target_os = "windows")]
+    let (cmd, arg) = ("where", "node");
+    #[cfg(not(target_os = "windows"))]
+    let (cmd, arg) = ("which", "node");
+
+    std::process::Command::new(cmd)
+        .arg(arg)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Build a human-readable description of exactly how a sidecar was resolved.
+///
+/// This is the production diagnostic: the same facts that the `cfg!(debug_assertions)`
+/// eprintln! lines print in dev are assembled here into a string that is both
+/// (a) appended to the error surfaced in the UI toast and (b) written to the
+/// `_diagnostics.log` file, so a portable/installed test on a user machine
+/// reveals the EXACT node command — including whether the path was split — even
+/// though stderr is invisible there.
+fn build_invocation_diagnostics(
+    app: &tauri::AppHandle,
+    node_cmd: &str,
+    args: &[String],
+) -> String {
+    let portable = find_portable_node();
+    let scripts = find_node_scripts_dir(app);
+    let exe = std::env::current_exe().ok();
+
+    let branch = if scripts.is_some() {
+        if portable.is_some() {
+            "PRODUCTION / portable (bundled node.exe next to exe)"
+        } else if node_on_path() {
+            "PRODUCTION / installed (node from PATH)"
+        } else {
+            "PRODUCTION / installed (bundled or probed node.exe — PATH had none)"
+        }
+    } else {
+        "DEV (tsx)"
+    };
+
+    format!(
+        "branch        : {branch}\n\
+         node_cmd      : {node_cmd:?}\n\
+         first_arg     : {:?}\n\
+         all_args      : {args:?}\n\
+         portable_node : {:?}\n\
+         scripts_dir   : {:?}\n\
+         current_exe   : {:?}\n\
+         debug_assert  : {}",
+        args.first(),
+        portable.as_ref().map(|p| p.display().to_string()),
+        scripts.as_ref().map(|p| p.display().to_string()),
+        exe.as_ref().map(|p| p.display().to_string()),
+        cfg!(debug_assertions),
+    )
+}
+
+/// Append a timestamped diagnostics block to `<base>/_diagnostics.log`.
+///
+/// `project_dir` is a single country project (`<base>/<country>`); the log is
+/// written one level up in the AgCensus base directory so every project's
+/// ingest attempts land in one file (`AgCensus/_diagnostics.log`).  Best-effort:
+/// any IO error is swallowed so logging never breaks the command.
+fn append_diagnostics_log(project_dir: &str, label: &str, content: &str) {
+    use std::io::Write;
+    let project = std::path::Path::new(project_dir);
+    // Prefer the AgCensus base (parent of the project) so all projects share
+    // one log; fall back to the project dir itself if it has no parent.
+    let log_dir = project.parent().unwrap_or(project);
+    let log_path = log_dir.join("_diagnostics.log");
+    let block = format!(
+        "===== {} @ {} =====\n{}\n\n",
+        label,
+        now_iso8601(),
+        content
+    );
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = file.write_all(block.as_bytes());
+    }
+}
+
 /// Resolve how to invoke a sidecar script: production bundle or dev tsx.
 ///
 /// Returns `(node_cmd, leading_args)` where `leading_args` is the
@@ -277,12 +371,27 @@ fn resolve_invocation(
             .to_string_lossy();
         let bundle = scripts_dir.join(format!("{stem}.mjs"));
 
-        // Portable build: bundled node.exe takes priority over PATH.
-        // Installed build: use PATH-resolved "node" to avoid a space-
-        // containing absolute path becoming the first lpCommandLine token.
-        let node_cmd = find_portable_node()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "node".to_string());
+        // Node resolution priority:
+        //  1. Portable: bundled node.exe next to the exe (full path).
+        //  2. Installed with node on PATH: bare "node" — preserves the case
+        //     that already works (Computer 1 NSIS) and never puts a space-
+        //     containing absolute path into the first lpCommandLine token.
+        //  3. Installed without PATH node: a node.exe bundled into the
+        //     resource dir (shipped via dist-scripts) — makes the installer
+        //     self-contained on machines with no Node (Computer 2).
+        //  4. Last resort: probe common Windows install locations.
+        //  5. Give up with bare "node" (produces a clear error downstream).
+        let node_cmd = if let Some(p) = find_portable_node() {
+            p.to_string_lossy().into_owned()
+        } else if node_on_path() {
+            "node".to_string()
+        } else if scripts_dir.join("node.exe").exists() {
+            scripts_dir.join("node.exe").to_string_lossy().into_owned()
+        } else if let Some(p) = find_node_binary() {
+            p.to_string_lossy().into_owned()
+        } else {
+            "node".to_string()
+        };
 
         if cfg!(debug_assertions) {
             eprintln!("[resolve] branch = PRODUCTION (bundle) for {script_name}");
@@ -1021,7 +1130,7 @@ async fn ingest_source(
 
     args.extend([
         "--project".to_string(),
-        project_dir,
+        project_dir.clone(),
         "--doc-id".to_string(),
         doc_id.clone(),
         "--file".to_string(),
@@ -1030,24 +1139,31 @@ async fn ingest_source(
         language,
     ]);
 
+    // Production diagnostics: assemble the exact resolved command and write it
+    // to <base>/_diagnostics.log so a portable/installed test on a user machine
+    // is conclusive even when stderr is invisible.  Also kept on the dev path.
+    let diagnostics = build_invocation_diagnostics(&app, &node_cmd, &args);
+    let diagnostics = format!("{diagnostics}\nresource_root : {resource_root:?}");
+    append_diagnostics_log(&project_dir, "ingest spawn", &diagnostics);
+
     if cfg!(debug_assertions) {
-        eprintln!(
-            "[ingest] SPAWN node_cmd = {:?}\n[ingest] SPAWN args = {:?}\n[ingest] AGCENSUS_RESOURCE_ROOT = {:?}",
-            node_cmd, args, resource_root
-        );
+        eprintln!("[ingest] diagnostics:\n{diagnostics}");
     }
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
         cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
     }
-    let (mut rx, _child) = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn ingest process: {e}"))?;
+    let (mut rx, _child) = cmd.spawn().map_err(|e| {
+        let msg = format!("Failed to spawn ingest process: {e}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "ingest spawn FAILED", &msg);
+        msg
+    })?;
 
     let mut buf = String::new();
     let mut stderr_buf = String::new();
     let mut progress_emitted = false;
+    let mut exit_code: Option<i32> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -1086,18 +1202,31 @@ async fn ingest_source(
             CommandEvent::Stderr(bytes) => {
                 stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
             }
-            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+                break;
+            }
+            CommandEvent::Error(_) => break,
             _ => {}
         }
     }
 
     // Surface the real error when the process exits without printing DONE:/ERROR:.
     if !progress_emitted {
-        let msg = if stderr_buf.trim().is_empty() {
-            "Ingest process exited without output".to_string()
+        let stderr_tail: String = stderr_buf.trim().chars().take(800).collect();
+        let base = if stderr_tail.is_empty() {
+            format!("Ingest process exited without output (exit code: {exit_code:?})")
         } else {
-            stderr_buf.trim().chars().take(800).collect()
+            format!("{stderr_tail}\n\n(exit code: {exit_code:?})")
         };
+        // Always append the resolved-command diagnostics so the failure is
+        // self-explanatory in the red toast, and log the full block.
+        let msg = format!("{base}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(
+            &project_dir,
+            "ingest NO PROGRESS (error surfaced to UI)",
+            &msg,
+        );
         let _ = app.emit(
             "ingest-progress",
             IngestProgressPayload {

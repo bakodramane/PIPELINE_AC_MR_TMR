@@ -126,6 +126,27 @@ copyFile(
 console.log('Data files copied to dist-scripts/');
 
 // ---------------------------------------------------------------------------
+// Bundle node.exe (Windows) so the MSI / NSIS installers are self-contained
+// ---------------------------------------------------------------------------
+// Copying node.exe into dist-scripts/ makes it ride the existing Tauri resource
+// glob ("../dist-scripts/" -> "dist-scripts/"), so installed builds ship a
+// node.exe at <resource_dir>/dist-scripts/node.exe.  The Rust backend
+// (resolve_invocation) uses it when the target machine has no Node on PATH,
+// removing the hard dependency on the user having installed Node.
+let bundledNodeExe = null;
+if (process.platform === 'win32') {
+  try {
+    bundledNodeExe = execSync('where node', { encoding: 'utf8' })
+      .trim().split('\n')[0].trim();
+    fs.copyFileSync(bundledNodeExe, path.join(OUT, 'node.exe'));
+    console.log(`Bundled node.exe into dist-scripts/ from: ${bundledNodeExe}`);
+  } catch {
+    bundledNodeExe = null;
+    console.warn('WARNING: node.exe not found on PATH; installers will fall back to system Node.');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Portable ZIP (only when --portable flag is passed)
 // ---------------------------------------------------------------------------
 
@@ -139,19 +160,13 @@ if (process.argv.includes('--portable')) {
     process.exit(1);
   }
 
-  // Find node.exe on the developer's machine
-  let nodeExePath;
-  try {
-    nodeExePath = execSync('where node', { encoding: 'utf8' })
-      .trim().split('\n')[0].trim();
-    if (!nodeExePath.endsWith('.exe') && !nodeExePath.includes('node')) {
-      throw new Error('node not found');
-    }
-    console.log(`Bundling node.exe from: ${nodeExePath}`);
-  } catch {
+  // Reuse the node.exe already resolved above (bundled into dist-scripts).
+  const nodeExePath = bundledNodeExe;
+  if (!nodeExePath || !fs.existsSync(nodeExePath)) {
     console.error('ERROR: node.exe not found on PATH. Cannot create self-contained portable ZIP.');
     process.exit(1);
   }
+  console.log(`Bundling node.exe (next to exe) from: ${nodeExePath}`);
 
   const zipPath = path.join(distDir, 'AgCensus-MR-TMR-Compiler-portable-win.zip');
   const stagingDir = path.join(ROOT, 'dist', 'portable-staging');
@@ -160,6 +175,10 @@ if (process.argv.includes('--portable')) {
   fs.copyFileSync(exePath, path.join(stagingDir, 'agcensus-compiler.exe'));
   fs.copyFileSync(nodeExePath, path.join(stagingDir, 'node.exe'));
   fs.cpSync(path.join(ROOT, 'dist-scripts'), path.join(stagingDir, 'dist-scripts'), { recursive: true });
+  // Portable resolves node.exe next to the exe (above), so the copy now riding
+  // inside dist-scripts/ is redundant here — drop it to avoid doubling ~node.exe.
+  const stagedDistNode = path.join(stagingDir, 'dist-scripts', 'node.exe');
+  if (fs.existsSync(stagedDistNode)) fs.rmSync(stagedDistNode);
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
   execSync('powershell -Command "Compress-Archive -Path \\"' + stagingDir + '\\\\*\\" -DestinationPath \\"' + zipPath + '\\" -Force"', { stdio: 'inherit' });
   fs.rmSync(stagingDir, { recursive: true });

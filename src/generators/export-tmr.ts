@@ -31,10 +31,6 @@ import type { Manifest } from "../project/schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Production-mode resource root (see tmr.ts for details).
-// Injected by the Rust export_project command when running from a bundle.
-const RESOURCE_ROOT = process.env["AGCENSUS_RESOURCE_ROOT"] ?? null;
-
 // Production-mode resource root, set by the Rust backend (export_project).
 // Must mirror tmr.ts exactly so generation and export resolve the WCA registry
 // identically. This file is bundled INTO export.mjs, so in production __dirname
