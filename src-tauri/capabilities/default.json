@@ -32,6 +32,7 @@
                                       ]
                         },
                         "dialog:allow-open",
+                        "dialog:allow-save",
                         "fs:allow-mkdir",
                         "fs:scope-home-recursive",
                         "fs:allow-home-write-recursive"

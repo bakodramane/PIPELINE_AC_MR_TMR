@@ -88,12 +88,39 @@ fn is_complete_scripts_dir(dir: &Path) -> bool {
             .exists()
 }
 
+/// True only when this is a genuine installed/portable *release* build.
+///
+/// `cfg!(debug_assertions)` is the single reliable dev-vs-production signal:
+///   • `npm run tauri:dev` / `cargo run` always compile a **debug** binary.
+///   • `tauri build` (installer + portable) always compiles a **release** binary.
+///
+/// Detecting production by "a `dist-scripts/` folder exists" was the bug: on the
+/// dev machine `npm run build:scripts` leaves a `dist-scripts/` at the project
+/// root, which could flip path resolution into the production branch even though
+/// the app is running under `tauri:dev` with no bundled `node.exe` — producing a
+/// broken node command.  Keying off the build profile makes the dev machine
+/// never fall into the production branch, regardless of stray folders.
+fn is_production_build() -> bool {
+    !cfg!(debug_assertions)
+}
+
 /// Find the pre-compiled ESM bundle directory (production mode).
 ///
 /// Probes every known installer/portable layout and returns the first
 /// candidate that is a *complete* dist-scripts tree (bundles + data files).
 /// Returns `Some(dir)` when running from an installed bundle, `None` in dev.
+///
+/// In a debug build (dev) this always returns `None` so the caller uses the tsx
+/// invocation, even if a `dist-scripts/` folder happens to exist at the cwd or
+/// next to the debug binary.
 fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if !is_production_build() {
+        if cfg!(debug_assertions) {
+            eprintln!("[resolve] debug build → dev mode, find_node_scripts_dir → None");
+        }
+        return None;
+    }
+
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // Tauri resource_dir — different bundlers / glob forms place dist-scripts
@@ -114,9 +141,23 @@ fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 
-    candidates
+    let chosen = candidates
         .into_iter()
-        .find(|dir| is_complete_scripts_dir(dir))
+        .find(|dir| is_complete_scripts_dir(dir));
+
+    if cfg!(debug_assertions) {
+        match &chosen {
+            Some(dir) => eprintln!(
+                "[resolve] find_node_scripts_dir → complete dist-scripts at {}",
+                dir.display()
+            ),
+            None => eprintln!(
+                "[resolve] find_node_scripts_dir → None (no complete dist-scripts found)"
+            ),
+        }
+    }
+
+    chosen
     // None → dev mode; caller falls back to tsx invocation.
 }
 
@@ -176,38 +217,103 @@ fn find_node_binary() -> Option<PathBuf> {
     None
 }
 
+/// Locate node.exe in the portable layout: the single directory that contains
+/// the running executable.
+///
+/// Portable builds ship a self-contained `node.exe` next to the `.exe` so the
+/// app can run on machines that have no system-wide Node installation and no
+/// PATH entry for Node.  This helper returns `Some(path)` when that bundled
+/// binary exists, `None` otherwise.
+///
+/// The path may contain spaces (e.g. a user's `Documents\My Apps\` folder).
+/// `app.shell().command(path)` ultimately calls `std::process::Command::new(path)`
+/// which passes the program path as a separate OS-level token (quoted in
+/// lpCommandLine on Windows), so spaces in the path are handled correctly.
+fn find_portable_node() -> Option<PathBuf> {
+    let exe_path = std::env::current_exe().ok()?;
+    let exe_dir  = exe_path.parent()?;
+    let node_exe = exe_dir.join("node.exe");
+    let found = node_exe.exists().then_some(node_exe);
+
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[resolve] current_exe = {}",
+            exe_path.display()
+        );
+        match &found {
+            Some(p) => eprintln!("[resolve] find_portable_node → {}", p.display()),
+            None => eprintln!("[resolve] find_portable_node → None (no node.exe next to exe)"),
+        }
+    }
+
+    found
+}
+
 /// Resolve how to invoke a sidecar script: production bundle or dev tsx.
 ///
-/// Returns `(node_binary, leading_args)` where leading_args contains the
-/// bundle path (prod) or [tsx_cli, script_path] (dev).
+/// Returns `(node_cmd, leading_args)` where `leading_args` is the
+/// bundle path alone (prod) or `[tsx_cli, script_path]` (dev).
+///
+/// Node resolution priority (production mode only):
+///  1. Portable: a `node.exe` bundled next to the app executable is used as-is.
+///     Its full absolute path is passed to `app.shell().command()`, which
+///     routes through `std::process::Command::new()` — the program and each
+///     argument are passed as discrete OS values, never concatenated into a
+///     command string, so spaces in the path are safe.
+///  2. Installed: `"node"` is resolved through PATH.  This avoids embedding an
+///     absolute path such as `C:\Program Files\nodejs\node.exe`; a space-
+///     containing path in the first lpCommandLine token can make the whitespace-
+///     delimited prefix `C:` land as process.argv[1] instead of the script
+///     path, producing the EISDIR crash at resolveMainPath.
 fn resolve_invocation(
     app: &tauri::AppHandle,
     script_name: &str,
 ) -> Result<(String, Vec<String>), String> {
-    if let Some(scripts_dir) = find_node_scripts_dir(app) {
-        // Production: node dist-scripts/<stem>.mjs [args]
+    let resolved = if let Some(scripts_dir) = find_node_scripts_dir(app) {
+        // Production: run the pre-compiled bundle directly with node.
         let stem = Path::new(script_name)
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy();
         let bundle = scripts_dir.join(format!("{stem}.mjs"));
-        let node = find_node_binary()
+
+        // Portable build: bundled node.exe takes priority over PATH.
+        // Installed build: use PATH-resolved "node" to avoid a space-
+        // containing absolute path becoming the first lpCommandLine token.
+        let node_cmd = find_portable_node()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "node".to_string());
-        Ok((node, vec![bundle.to_string_lossy().into_owned()]))
+
+        if cfg!(debug_assertions) {
+            eprintln!("[resolve] branch = PRODUCTION (bundle) for {script_name}");
+        }
+        (node_cmd, vec![bundle.to_string_lossy().into_owned()])
     } else {
         // Dev: node tsx_cli script_path [args]
         let (tsx_cli, _) = generator_paths();
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let script   = manifest.join("scripts").join(script_name);
-        Ok((
+
+        if cfg!(debug_assertions) {
+            eprintln!("[resolve] branch = DEV (tsx) for {script_name}");
+        }
+        (
             "node".to_string(),
             vec![
                 tsx_cli.to_string_lossy().into_owned(),
                 script.to_string_lossy().into_owned(),
             ],
-        ))
+        )
+    };
+
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[resolve] node_cmd = {:?}\n[resolve] leading_args = {:?}",
+            resolved.0, resolved.1
+        );
     }
+
+    Ok(resolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -526,8 +632,14 @@ async fn export_project(
     export_type: String,
 ) -> Result<String, String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "export.mjs")?;
-    let resource_root: Option<String> = find_node_scripts_dir(&app)
-        .map(|d| d.to_string_lossy().into_owned());
+
+    // AGCENSUS_RESOURCE_ROOT must be injected here exactly as in
+    // generate_mr_sections / generate_tmr_subtable / ingest_source so the
+    // bundled export script (which inlines export-tmr.ts) locates
+    // concepts/wca-2020.json under <dist-scripts>/concepts/ instead of the
+    // wrong __dirname-relative `../concepts` (= install root) path.
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+
     args.extend(["--project".to_string(), project_dir, "--type".to_string(), export_type]);
 
     let mut cmd = app.shell().command(&node_cmd).args(&args);
@@ -891,8 +1003,11 @@ fn copy_source_file(
 
 /// Run the ingest pipeline for one PDF source document.
 ///
-/// Spawns the ingest sidecar and streams progress events ("ingest-progress")
-/// back to the frontend.
+/// Spawns `node ingest.mjs` (production: bundled ESM; dev: via tsx) and
+/// streams `ingest-progress` events back to the frontend.
+///
+/// Command construction mirrors `generate_tmr_subtable` exactly so that
+/// Windows drive-letter paths are never split across arguments.
 #[tauri::command]
 async fn ingest_source(
     app: tauri::AppHandle,
@@ -902,14 +1017,26 @@ async fn ingest_source(
     language: String,
 ) -> Result<(), String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "ingest.mjs")?;
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+
     args.extend([
-        "--project".to_string(), project_dir,
-        "--doc-id".to_string(),  doc_id.clone(),
-        "--file".to_string(),    file_path,
-        "--language".to_string(), language,
+        "--project".to_string(),
+        project_dir,
+        "--doc-id".to_string(),
+        doc_id.clone(),
+        "--file".to_string(),
+        file_path,
+        "--language".to_string(),
+        language,
     ]);
 
-    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[ingest] SPAWN node_cmd = {:?}\n[ingest] SPAWN args = {:?}\n[ingest] AGCENSUS_RESOURCE_ROOT = {:?}",
+            node_cmd, args, resource_root
+        );
+    }
+
     let mut cmd = app.shell().command(&node_cmd).args(&args);
     if let Some(root) = resource_root {
         cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
@@ -1245,6 +1372,211 @@ fn delete_source(project_dir: String, doc_id: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Bundle helpers
+// ---------------------------------------------------------------------------
+
+/// Walk `dir` recursively, appending every regular file path to `result`.
+fn collect_files_recursive(
+    dir: &std::path::Path,
+    result: &mut Vec<std::path::PathBuf>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read '{}': {e}", dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, result)?;
+        } else {
+            result.push(path);
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Export bundle command
+// ---------------------------------------------------------------------------
+
+/// Zip the entire project directory into a single portable bundle file.
+///
+/// The archive stores entries as `<project-folder-name>/<relative-path>` so
+/// that importing recreates the project folder cleanly inside any base dir.
+/// Returns `Ok(dest_path)` on success.
+#[tauri::command]
+fn export_bundle(project_dir: String, dest_path: String) -> Result<String, String> {
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::path::Path;
+    use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
+
+    let project_path = Path::new(&project_dir);
+
+    // The project folder name becomes the top-level directory inside the zip.
+    let project_name = project_path
+        .file_name()
+        .ok_or_else(|| "Invalid project path — has no folder name".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    // Collect every file under the project directory.
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    collect_files_recursive(project_path, &mut files)?;
+
+    let dest_file = fs::File::create(&dest_path)
+        .map_err(|e| format!("Failed to create '{dest_path}': {e}"))?;
+
+    let mut zip = zip::ZipWriter::new(dest_file);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated);
+
+    for file_path in &files {
+        // Path relative to the project directory root.
+        let rel = file_path
+            .strip_prefix(project_path)
+            .map_err(|e| format!("Path strip error: {e}"))?;
+
+        // Entry name: "<project_name>/<relative>"  (forward slashes in zip)
+        let entry_name = format!(
+            "{}/{}",
+            project_name,
+            rel.to_string_lossy().replace('\\', "/")
+        );
+
+        zip.start_file(&entry_name, options)
+            .map_err(|e| format!("Failed to add '{entry_name}' to zip: {e}"))?;
+
+        let mut f = fs::File::open(file_path)
+            .map_err(|e| format!("Failed to open '{}': {e}", file_path.display()))?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read '{}': {e}", file_path.display()))?;
+        zip.write_all(&buf)
+            .map_err(|e| format!("Failed to write to zip: {e}"))?;
+    }
+
+    zip.finish()
+        .map_err(|e| format!("Failed to finalise zip: {e}"))?;
+
+    Ok(dest_path)
+}
+
+// ---------------------------------------------------------------------------
+// Import bundle command
+// ---------------------------------------------------------------------------
+
+/// Extract a project bundle zip into the AgCensus base directory.
+///
+/// Returns `Ok(project_folder_name)` on success.
+/// Returns `Err("EXISTS:<name>")` when the destination already exists and
+/// `overwrite` is false — the caller should prompt before retrying with
+/// `overwrite: true`.
+#[tauri::command]
+fn import_bundle(
+    bundle_path: String,
+    base_dir: String,
+    overwrite: bool,
+) -> Result<String, String> {
+    use std::fs;
+    use std::io::Read;
+    use std::path::Path;
+
+    let f = fs::File::open(&bundle_path)
+        .map_err(|e| format!("Failed to open bundle: {e}"))?;
+    let mut archive = zip::ZipArchive::new(f)
+        .map_err(|e| format!("Not a valid ZIP file: {e}"))?;
+
+    if archive.len() == 0 {
+        return Err("Bundle is empty".to_string());
+    }
+
+    // Pass 1: collect all entry names (ZipFile borrow drops at each iteration).
+    let mut entry_names: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        let file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
+        entry_names.push(file.name().to_string());
+    }
+
+    // Derive the project folder name from the first entry's top-level component.
+    let project_folder_name = {
+        let first = entry_names
+            .first()
+            .ok_or_else(|| "Bundle has no entries".to_string())?;
+        let top = first.split('/').next().unwrap_or("").trim().to_string();
+        if top.is_empty() {
+            return Err("Bundle has no top-level project directory".to_string());
+        }
+        top
+    };
+
+    // Validate: manifest.json must be present inside the bundle.
+    let manifest_entry = format!("{}/manifest.json", project_folder_name);
+    if !entry_names.iter().any(|n| n == &manifest_entry) {
+        return Err(
+            "Not a valid Ag Census project bundle — manifest.json not found".to_string(),
+        );
+    }
+
+    // Check whether the destination directory already exists.
+    let dest_dir = Path::new(&base_dir).join(&project_folder_name);
+    if dest_dir.exists() {
+        if !overwrite {
+            return Err(format!("EXISTS:{project_folder_name}"));
+        }
+        fs::remove_dir_all(&dest_dir)
+            .map_err(|e| format!("Failed to remove existing project: {e}"))?;
+    }
+
+    // Pass 2: extract all entries into base_dir.
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
+
+        let raw_name = file.name().replace('\\', "/");
+
+        // Reject path traversal attempts.
+        if raw_name.contains("..") {
+            return Err(format!(
+                "Security: rejected path traversal in entry '{raw_name}'"
+            ));
+        }
+
+        let out_path = Path::new(&base_dir).join(&raw_name);
+
+        if raw_name.ends_with('/') {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create directory: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent directory: {e}"))?;
+            }
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
+                .map_err(|e| format!("Failed to read zip entry: {e}"))?;
+            fs::write(&out_path, &buf)
+                .map_err(|e| format!("Failed to write '{}': {e}", out_path.display()))?;
+        }
+    }
+
+    // Validate the extracted manifest parses as JSON (detect corrupt bundles).
+    let manifest_path = dest_dir.join("manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).map_err(|e| {
+        let _ = fs::remove_dir_all(&dest_dir);
+        format!("Failed to read extracted manifest.json: {e}")
+    })?;
+    serde_json::from_str::<serde_json::Value>(&manifest_content).map_err(|e| {
+        let _ = fs::remove_dir_all(&dest_dir);
+        format!("Bundle is corrupt — manifest.json is not valid JSON: {e}")
+    })?;
+
+    Ok(project_folder_name)
+}
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
@@ -1261,6 +1593,8 @@ pub fn run() {
             ensure_base_dir,
             create_project,
             export_project,
+            export_bundle,
+            import_bundle,
             save_mr_section,
             approve_mr_section,
             reset_mr_section,

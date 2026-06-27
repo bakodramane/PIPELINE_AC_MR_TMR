@@ -35,7 +35,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Injected by the Rust export_project command when running from a bundle.
 const RESOURCE_ROOT = process.env["AGCENSUS_RESOURCE_ROOT"] ?? null;
 
-/** WCA 2020 concept registry — same JSON consumed by tmr.ts. */
+// Production-mode resource root, set by the Rust backend (export_project).
+// Must mirror tmr.ts exactly so generation and export resolve the WCA registry
+// identically. This file is bundled INTO export.mjs, so in production __dirname
+// is the dist-scripts directory and `../concepts` would wrongly point at the
+// install root — AGCENSUS_RESOURCE_ROOT avoids that.
+const RESOURCE_ROOT = process.env["AGCENSUS_RESOURCE_ROOT"] ?? null;
+
+/**
+ * WCA 2020 concept registry — same JSON consumed by tmr.ts, resolved the same way.
+ * Dev:  <src/generators/../concepts/wca-2020.json> = <project-root>/src/concepts/wca-2020.json
+ * Prod: <RESOURCE_ROOT>/concepts/wca-2020.json
+ */
 const WCA_PATH = RESOURCE_ROOT
   ? path.join(RESOURCE_ROOT, "concepts", "wca-2020.json")
   : path.resolve(__dirname, "..", "concepts", "wca-2020.json");
