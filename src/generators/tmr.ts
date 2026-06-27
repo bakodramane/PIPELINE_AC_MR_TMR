@@ -356,6 +356,22 @@ interface SubTableSpec {
   columns: Record<string, ColumnSpec>;
   validation_rules: ValidationRule[];
   missing_value_codes: Record<string, string>;
+  /**
+   * When true, this sub-table's rows are bins of a single variable (e.g. land
+   * size classes, household size).  If the source reports DIFFERENT bins than
+   * the WCA defaults, the generator uses the source's bins as the row labels
+   * instead of forcing the WCA categories and leaving them empty.  Only set on
+   * sub-tables whose rows are arbitrary bins of one variable — never on
+   * sub-tables with fixed structural rows (legal status, livestock types).
+   */
+  adaptive_categories?: boolean;
+  /** Human-readable name of the binned variable, for the adaptive prompt. */
+  category_variable?: string;
+  /**
+   * Structural rows that are always kept regardless of source bins (e.g.
+   * "Total").  Everything else in `rows` is a replaceable WCA-default bin.
+   */
+  fixed_rows?: string[];
 }
 
 interface WcaConcepts {
@@ -377,6 +393,21 @@ interface ModelCellEntry {
 interface ModelSubTableResponse {
   sub_table: number;
   cells: Record<string, ModelCellEntry>;
+}
+
+/** One row in an adaptive-category response: a source-derived category label
+ *  plus its cell values keyed by the exact column labels. */
+interface AdaptiveRowEntry {
+  category: string;
+  cells: Record<string, ModelCellEntry>;
+}
+
+/** The model's response for an adaptive-category sub-table.  The row labels
+ *  (`rows[].category`) come from the source when they differ from the WCA
+ *  defaults, so they are returned explicitly rather than pre-supplied. */
+interface AdaptiveModelResponse {
+  sub_table: number;
+  rows: AdaptiveRowEntry[];
 }
 
 /** One stored cell in _cells.json (extends schema.Cell with TMR fields). */
@@ -474,6 +505,17 @@ function buildExpectedCellKeys(spec: SubTableSpec): string[] {
  */
 function buildRowCellKeys(spec: SubTableSpec, rowLabel: string): string[] {
   return Object.keys(spec.columns).map((col) => toCellKey(rowLabel, col));
+}
+
+/**
+ * Compare two row-label lists as case-insensitive sets (order-independent).
+ * Used to decide whether an adaptive sub-table's categories actually differ
+ * from the WCA defaults.
+ */
+function rowListsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b.map((s) => s.trim().toLowerCase()));
+  return a.every((v) => setB.has(v.trim().toLowerCase()));
 }
 
 /**
@@ -752,6 +794,99 @@ Source ID rules:
 Provide all ${cellsToPopulate.length} cells.`;
 }
 
+/**
+ * Build the user prompt for an adaptive-category sub-table.
+ *
+ * Unlike buildUserPrompt, this does NOT lock the model to the WCA row labels.
+ * It tells the model the standard WCA categories but instructs it to use the
+ * source's own categories when the source bins the variable differently,
+ * preserving the source's labels.  The model returns a `rows` array of
+ * { category, cells } so the actual category labels survive into _cells.json.
+ */
+function buildAdaptiveUserPrompt(
+  subTableNumber: number,
+  spec: SubTableSpec,
+  pages: PageJson[],
+  tables: TableJson[],
+  isHouseholdSector?: boolean,
+  nonEnglishHint?: boolean,
+): string {
+  const variable = spec.category_variable ?? "this variable";
+  const fixedRows = spec.fixed_rows ?? [];
+  const wcaBins = spec.rows.filter((r) => !fixedRows.includes(r));
+
+  const columnLines = Object.entries(spec.columns)
+    .map(([col, s]) => `  "${col}" (expected unit: ${s.unit})`)
+    .join("\n");
+
+  const householdSectorNote = isHouseholdSector
+    ? `\n\nUniverse note: This sub-table covers the **household sector only**. Only include holdings operated by civil persons or groups of civil persons (i.e. individual farm households).`
+    : "";
+
+  const nonEnglishNote = nonEnglishHint
+    ? `\n\nThe source document may be in a non-English language. Read numeric values positionally from the tables; the category labels you return should be a faithful (translated if necessary) rendering of the source's own bins.`
+    : "";
+
+  const fixedRowsNote = fixedRows.length
+    ? `\n\nAlways include ${fixedRows.map((r) => `"${r}"`).join(", ")} as ${fixedRows.length > 1 ? "rows" : "a row"}.`
+    : "";
+
+  return `## Sub-Table Specification (adaptive categories)${nonEnglishNote}
+
+Sub-Table ${subTableNumber}: ${spec.title}
+Universe: ${spec.universe}${householdSectorNote}
+
+This sub-table breaks down holdings by **${variable}**.
+
+The standard WCA 2020 categories for ${variable} are:
+${wcaBins.map((b) => `  - ${b}`).join("\n")}
+
+**Adaptive category rule:**
+- If the source document reports these EXACT categories, use them as the row labels.
+- If the source reports DIFFERENT categories for ${variable} (e.g. different size bins or ranges, such as "1–5 / 6–8 / 9 and more" instead of the standard bins), use the categories **AS REPORTED in the source** — preserve the source's actual labels verbatim as the row labels.
+- Do NOT force the source data into the standard categories.
+- Do NOT invent categories that are not present in the source.
+- Keep the same value columns (listed below) unchanged.${fixedRowsNote}
+
+Columns (use these EXACT column labels as keys in each row's "cells" object):
+${columnLines}
+
+## Evidence Pages (PRIMARY SOURCE — search here first)
+
+Census reports frequently present aggregate totals in introductory text sections before the formal tables. READ EACH PAGE CAREFULLY. Extract numeric values from sentences, paragraphs, and table-like structures in the text.
+
+${formatEvidencePageBlock(pages)}
+
+## Evidence Tables (SUPPLEMENTARY — cross-reference when available)
+
+${formatEvidenceTableBlock(tables)}
+
+## Output Instructions
+
+Return ONLY a valid JSON object — no markdown fences, no preamble. Exact structure:
+
+{
+  "sub_table": ${subTableNumber},
+  "rows": [
+    {
+      "category": "<row label — the source's own category, or the WCA standard label if they match>",
+      "cells": {
+${Object.keys(spec.columns)
+  .map((col) => `        "${col}": { "value": <number or "..">, "unit": "<unit>", "source_table_id": "<table_id or page_id>", "source_row": "<row label in source>", "source_column": "<column header>", "derived": false, "derivation": null }`)
+  .join(",\n")}
+      }
+    }
+  ]
+}
+
+Rules:
+- Never invent, estimate, or calculate values — copy them directly from the source as written.
+- Do NOT perform unit conversions. Report the value and unit as they appear; the application converts in code.
+- If a value cannot be found, set it to the WCA missing-value code ".." and source_table_id to "".
+- Source ID rules: a structured table → use its table_id (e.g. "01-main-report-t003"); page text only → use the page_id (e.g. "01-main-report-p0026").
+- Return one entry in "rows" for EACH category the source actually reports.`;
+}
+
 // ---------------------------------------------------------------------------
 // Source verification
 // ---------------------------------------------------------------------------
@@ -881,9 +1016,13 @@ export async function generateSubTable(
   );
 
   // ── 3. Determine generation strategy ─────────────────────────────────────
-  const isMultiRow = MULTI_ROW_SUBTABLES.has(subTableNumber);
+  const isAdaptive = spec.adaptive_categories === true;
+  // Adaptive sub-tables always run as a SINGLE call: the row categories are not
+  // known until the model reads the source (they may be the source's own bins
+  // rather than the WCA defaults), so one-call-per-row is impossible.
+  const isMultiRow = !isAdaptive && MULTI_ROW_SUBTABLES.has(subTableNumber);
   const isHouseholdSector = HOUSEHOLD_SECTOR_SUBTABLES.has(subTableNumber);
-  // For multi-row: iterate every spec row.  For single-call: null sentinel.
+  // For multi-row: iterate every spec row.  For single-call/adaptive: null sentinel.
   const rowsToProcess: Array<string | null> = isMultiRow ? spec.rows : [null];
 
   // ── 4. Generate cells ─────────────────────────────────────────────────────
@@ -902,6 +1041,37 @@ export async function generateSubTable(
   // Capture the raw model text from the most recent failed parse so it can
   // be stored as raw_preview in _cells.json for debugging without opening files.
   let lastRawResponse = "";
+  // Adaptive sub-tables only: the row category labels the model actually used
+  // (the source's bins when they differ from the WCA defaults).
+  let usedCategories: string[] | null = null;
+
+  // Store one model cell under its canonical key (shared by the fixed-row and
+  // adaptive-category paths so verification + shape stay identical).
+  const storeCell = async (
+    cellKey: string,
+    modelCell: ModelCellEntry,
+  ): Promise<void> => {
+    const sourceId = (modelCell.source_table_id ?? "").trim();
+    const sourceVerified = await verifySource(sourceId, tablesDir, pagesDir);
+    const value = parseModelValue(modelCell.value);
+
+    storedCells[cellKey] = {
+      value,
+      unit: (modelCell.unit ?? "").trim() || "unknown",
+      sources: [
+        {
+          table_id: modelCell.source_table_id,
+          row: modelCell.source_row,
+          column: modelCell.source_column,
+        },
+      ],
+      derived: Boolean(modelCell.derived),
+      derivation: modelCell.derivation ?? null,
+      flags: [],
+      human_edited: false,
+      ...(!sourceVerified && { unverified_source: true }),
+    };
+  };
 
   for (const singleRow of rowsToProcess) {
     // Cells to populate on this call: all cells (single-call) or this row's cells
@@ -910,16 +1080,25 @@ export async function generateSubTable(
       : expectedCellKeys;
 
     const systemPrompt = buildSystemPrompt();
-    const userPrompt = buildUserPrompt(
-      subTableNumber,
-      spec,
-      pages,
-      evidenceTables,
-      cellsForThisCall,
-      singleRow ?? undefined,
-      isHouseholdSector,
-      nonEnglishHint,
-    );
+    const userPrompt = isAdaptive
+      ? buildAdaptiveUserPrompt(
+          subTableNumber,
+          spec,
+          pages,
+          evidenceTables,
+          isHouseholdSector,
+          nonEnglishHint,
+        )
+      : buildUserPrompt(
+          subTableNumber,
+          spec,
+          pages,
+          evidenceTables,
+          cellsForThisCall,
+          singleRow ?? undefined,
+          isHouseholdSector,
+          nonEnglishHint,
+        );
 
     const wallStart = Date.now();
     // Per-model max-token safety check: Kimi K2.6 tends to be more verbose,
@@ -953,41 +1132,53 @@ export async function generateSubTable(
     // Parse response — use extractJson to tolerate preamble text or partial
     // thinking content that some models (notably Kimi K2.6) emit before the JSON.
     const extracted = extractJson(result.text);
-    let parsed: ModelSubTableResponse | null = null;
-    try {
-      if (!extracted) throw new Error("No JSON object found in response");
-      parsed = JSON.parse(extracted) as ModelSubTableResponse;
-      if (!parsed.cells || typeof parsed.cells !== "object") {
-        throw new Error("Response JSON missing 'cells' object");
+
+    if (isAdaptive) {
+      // Adaptive path: rows carry source-derived category labels.
+      let parsedA: AdaptiveModelResponse | null = null;
+      try {
+        if (!extracted) throw new Error("No JSON object found in response");
+        parsedA = JSON.parse(extracted) as AdaptiveModelResponse;
+        if (!Array.isArray(parsedA.rows)) {
+          throw new Error("Adaptive response JSON missing 'rows' array");
+        }
+      } catch {
+        anyParseFailed = true;
+        lastRawResponse = result.text; // preserve for raw_preview in _cells.json
+        continue;
       }
-    } catch {
-      anyParseFailed = true;
-      lastRawResponse = result.text; // preserve for raw_preview in _cells.json
-      continue; // skip this row/call but continue with others
-    }
 
-    // Verify sources and accumulate cells
-    for (const [cellKey, modelCell] of Object.entries(parsed.cells)) {
-      const sourceId = (modelCell.source_table_id ?? "").trim();
-      const sourceVerified = await verifySource(sourceId, tablesDir, pagesDir);
-      const value = parseModelValue(modelCell.value);
+      const cats: string[] = [];
+      for (const rowEntry of parsedA.rows) {
+        const category = String(rowEntry?.category ?? "").trim();
+        if (!category || !rowEntry.cells || typeof rowEntry.cells !== "object") {
+          continue;
+        }
+        cats.push(category);
+        for (const [colLabel, modelCell] of Object.entries(rowEntry.cells)) {
+          await storeCell(toCellKey(category, colLabel), modelCell);
+        }
+      }
+      usedCategories = cats;
+    } else {
+      // Fixed-row path: cells keyed directly by the WCA row_column convention.
+      let parsed: ModelSubTableResponse | null = null;
+      try {
+        if (!extracted) throw new Error("No JSON object found in response");
+        parsed = JSON.parse(extracted) as ModelSubTableResponse;
+        if (!parsed.cells || typeof parsed.cells !== "object") {
+          throw new Error("Response JSON missing 'cells' object");
+        }
+      } catch {
+        anyParseFailed = true;
+        lastRawResponse = result.text; // preserve for raw_preview in _cells.json
+        continue; // skip this row/call but continue with others
+      }
 
-      storedCells[cellKey] = {
-        value,
-        unit: (modelCell.unit ?? "").trim() || "unknown",
-        sources: [
-          {
-            table_id: modelCell.source_table_id,
-            row: modelCell.source_row,
-            column: modelCell.source_column,
-          },
-        ],
-        derived: Boolean(modelCell.derived),
-        derivation: modelCell.derivation ?? null,
-        flags: [],
-        human_edited: false,
-        ...(!sourceVerified && { unverified_source: true }),
-      };
+      // Verify sources and accumulate cells
+      for (const [cellKey, modelCell] of Object.entries(parsed.cells)) {
+        await storeCell(cellKey, modelCell);
+      }
     }
   }
 
@@ -1012,8 +1203,25 @@ export async function generateSubTable(
     };
     await writeJson(cellsJsonPath, cellsJson);
   } else {
+    // Final row labels: source-derived categories for adaptive sub-tables when
+    // the model returned any, else the WCA defaults.  categoriesAdapted is true
+    // only when those categories actually differ from the WCA standard.
+    const finalRows =
+      isAdaptive && usedCategories && usedCategories.length > 0
+        ? usedCategories
+        : spec.rows;
+    const categoriesAdapted =
+      isAdaptive && !rowListsEqual(finalRows, spec.rows);
+
     // ── 6. Fill missing expected keys ─────────────────────────────────────
-    for (const key of expectedCellKeys) {
+    // For adaptive sub-tables, "expected" means the categories the source
+    // actually used; for fixed-row sub-tables it is the WCA row × column grid.
+    const keysToEnsure = isAdaptive
+      ? finalRows.flatMap((rowLabel) =>
+          Object.keys(spec.columns).map((col) => toCellKey(rowLabel, col)),
+        )
+      : expectedCellKeys;
+    for (const key of keysToEnsure) {
       if (!(key in storedCells)) {
         storedCells[key] = {
           value: "..",
@@ -1042,11 +1250,16 @@ export async function generateSubTable(
     }
 
     // ── 8. Run validation rules ───────────────────────────────────────────
+    // The WCA sum_to_total rules reference the WCA default row labels.  When
+    // the categories were adapted to the source's own bins those labels no
+    // longer exist, so the rules are not applicable — skip them.
     const validationFlags: ValidationFlag[] = [];
-    for (const rule of spec.validation_rules) {
-      for (const colLabel of Object.keys(spec.columns)) {
-        const flag = runValidationRule(storedCells, rule, colLabel);
-        if (flag) validationFlags.push(flag);
+    if (!categoriesAdapted) {
+      for (const rule of spec.validation_rules) {
+        for (const colLabel of Object.keys(spec.columns)) {
+          const flag = runValidationRule(storedCells, rule, colLabel);
+          if (flag) validationFlags.push(flag);
+        }
       }
     }
 
@@ -1060,6 +1273,14 @@ export async function generateSubTable(
     cellsJson[subTableKey] = {
       ...storedCells,
       validation_flags: validationFlags,
+      // Traceability: record when the rows are the source's own categories
+      // rather than the WCA standard, plus both lists so a reviewer (and the
+      // draft export) can see exactly what changed.
+      ...(isAdaptive && {
+        categories_adapted: categoriesAdapted,
+        used_categories: finalRows,
+        wca_default_categories: spec.rows,
+      }),
       ...(anyParseFailed && { parse_failed: true }),
       ...(anyTruncated && { truncated: true }),
     };

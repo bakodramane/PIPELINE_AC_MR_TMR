@@ -104,6 +104,35 @@ fn is_production_build() -> bool {
     !cfg!(debug_assertions)
 }
 
+/// Strip the Windows extended-length path prefix (`\\?\` / `\\?\UNC\`).
+///
+/// On some Windows configurations `resource_dir()` returns paths in the
+/// extended-length form (e.g. `\\?\C:\Users\…\dist-scripts\export.mjs`).  This
+/// prefix is fine for Win32 file APIs and for `CreateProcess`, but Node.js
+/// CANNOT parse it as its main-module argument: it mis-resolves the script
+/// path, lands on `C:`, and crashes with
+/// `EISDIR: illegal operation on a directory, lstat 'C:'`.
+///
+/// This was the definitive root cause of the Computer 2 NSIS failure: only that
+/// machine's Windows returned the `\\?\` form (the long app name under
+/// `AppData\Local` pushed the path over the threshold), so the script path
+/// passed to Node carried the prefix and Node mis-resolved it.  Computer 1's
+/// paths never carried the prefix, so it always worked.
+///
+/// Normalising every path that becomes a Node argument (script path, scripts
+/// dir, and `AGCENSUS_RESOURCE_ROOT`) to the plain `C:\…` form fixes it for all
+/// machines and install formats.
+fn strip_extended_prefix(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    // Strip Windows extended-length prefixes that Node.js cannot parse.
+    let stripped = s
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{}", rest))
+        .or_else(|| s.strip_prefix(r"\\?\").map(|rest| rest.to_string()))
+        .unwrap_or_else(|| s.to_string());
+    PathBuf::from(stripped)
+}
+
 /// Find the pre-compiled ESM bundle directory (production mode).
 ///
 /// Probes every known installer/portable layout and returns the first
@@ -141,9 +170,14 @@ fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 
+    // Strip the `\\?\` extended-length prefix so the resolved dir — and every
+    // path derived from it (the script first-arg, the bundled node.exe program
+    // path, and AGCENSUS_RESOURCE_ROOT) — is the plain `C:\…` form that Node.js
+    // can parse.  See strip_extended_prefix for the full rationale.
     let chosen = candidates
         .into_iter()
-        .find(|dir| is_complete_scripts_dir(dir));
+        .find(|dir| is_complete_scripts_dir(dir))
+        .map(|dir| strip_extended_prefix(&dir));
 
     if cfg!(debug_assertions) {
         match &chosen {

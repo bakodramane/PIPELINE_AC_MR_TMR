@@ -90,6 +90,11 @@ const NON_CELL_KEYS = new Set([
   "parse_failed",
   "truncated",
   "raw_response",
+  // Adaptive-category metadata (see tmr.ts): these sit beside the cell map and
+  // must never be mistaken for a cell.
+  "categories_adapted",
+  "used_categories",
+  "wca_default_categories",
 ]);
 
 /** One source reference as stored per cell in _cells.json (see tmr.ts). */
@@ -173,6 +178,13 @@ export async function exportTmr(
     const colsPerValue = draft ? 2 : 1;
     const numCols = colKeys.length * colsPerValue + 1; // +1 for the row-label column A
     const subTableKey = `sub_table_${n}`;
+    const subTableEntry = cellsJson[subTableKey];
+    const entryObj =
+      subTableEntry && typeof subTableEntry === "object"
+        ? (subTableEntry as Record<string, unknown>)
+        : null;
+    // Adaptive sub-tables (tmr.ts) may store source-derived row categories.
+    const categoriesAdapted = entryObj?.categories_adapted === true;
 
     // ── Title row: T<n> — <title> ────────────────────────────────────────
     const titleRow: CellValue[] = [`T${n} — ${spec.title}`];
@@ -193,6 +205,25 @@ export async function exportTmr(
     }
     rowIdx++;
 
+    // ── Adapted-categories note (draft only) ──────────────────────────────
+    // Flags for the reviewer that the rows below are the source's own
+    // categories, not the WCA standard, listing the WCA defaults for contrast.
+    if (draft && categoriesAdapted && entryObj) {
+      const wcaDefaults = Array.isArray(entryObj.wca_default_categories)
+        ? (entryObj.wca_default_categories as string[])
+        : spec.rows;
+      const noteRow: CellValue[] = [
+        `Note: row categories adapted from the source — differ from WCA standard (${wcaDefaults.join(", ")})`,
+      ];
+      for (let c = 1; c < numCols; c++) noteRow.push(null);
+      wsData.push(noteRow);
+      if (numCols > 1) {
+        merges.push({ s: { r: rowIdx, c: 0 }, e: { r: rowIdx, c: numCols - 1 } });
+      }
+      boldSet.add(XLSX.utils.encode_cell({ r: rowIdx, c: 0 }));
+      rowIdx++;
+    }
+
     // ── Column header row: Row | Col1 (unit) | [Col1 source] | … ─────────
     const colHeaderRow: CellValue[] = ["Row"];
     for (const col of colKeys) {
@@ -208,9 +239,7 @@ export async function exportTmr(
     rowIdx++;
 
     // ── Data rows ─────────────────────────────────────────────────────────
-    const subTableEntry = cellsJson[subTableKey];
-
-    if (!subTableEntry || typeof subTableEntry !== "object") {
+    if (!entryObj) {
       // Sub-table has not been generated yet
       const notGenRow: CellValue[] = ["— not yet generated"];
       for (let c = 1; c < numCols; c++) notGenRow.push(null);
@@ -220,8 +249,13 @@ export async function exportTmr(
       }
       rowIdx++;
     } else {
-      const entry = subTableEntry as Record<string, unknown>;
-      for (const rowLabel of spec.rows) {
+      const entry = entryObj;
+      // For adaptive sub-tables the rows are the source's own categories
+      // (used_categories); otherwise the WCA defaults.
+      const rowLabels = Array.isArray(entry.used_categories)
+        ? (entry.used_categories as string[])
+        : spec.rows;
+      for (const rowLabel of rowLabels) {
         const dataRow: CellValue[] = [rowLabel];
         for (let ci = 0; ci < colKeys.length; ci++) {
           const key = toCellKey(rowLabel, colKeys[ci]);

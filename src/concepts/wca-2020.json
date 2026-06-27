@@ -89,6 +89,9 @@
     "4": {
       "title": "Distribution by land size classes",
       "universe": "all agricultural holdings",
+      "adaptive_categories": true,
+      "category_variable": "land size class",
+      "fixed_rows": ["Total"],
       "rows": [
         "Total",
         "Less than 1 ha",
@@ -311,6 +314,9 @@
     "10": {
       "title": "Holdings by household size",
       "universe": "household sector only",
+      "adaptive_categories": true,
+      "category_variable": "household size",
+      "fixed_rows": ["Total"],
       "rows": [
         "Total",
         "1 person",
