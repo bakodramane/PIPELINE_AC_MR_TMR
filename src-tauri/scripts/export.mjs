@@ -96,13 +96,15 @@ async function main() {
       writeLine("ERROR:Missing required --project argument");
       return;
     }
-    const VALID_TYPES = ["tmr", "mr", "mr-draft", "mr-docx", "mr-docx-draft", "mr-clean", "mr-docx-clean"];
+    const VALID_TYPES = ["tmr", "tmr-draft", "mr", "mr-draft", "mr-docx", "mr-docx-draft", "mr-clean", "mr-docx-clean"];
     if (!VALID_TYPES.includes(args.type)) {
       writeLine(`ERROR:Missing or invalid --type argument — must be one of: ${VALID_TYPES.join(", ")}`);
       return;
     }
 
-    if (args.type === "tmr") {
+    if (args.type === "tmr" || args.type === "tmr-draft") {
+      // tmr        → clean XLSX (values only, database-ready)
+      // tmr-draft  → draft XLSX (adds a Source column per value, for review)
       let mod;
       try {
         // tsx registers a loader that resolves .ts extensions in dynamic imports
@@ -111,7 +113,7 @@ async function main() {
         writeLine(`ERROR:Cannot load TMR export module: ${sanitise(String(err))}`);
         return;
       }
-      const outputPath = await mod.exportTmr(args.project);
+      const outputPath = await mod.exportTmr(args.project, args.type === "tmr-draft");
       writeLine(`DONE:${outputPath}`);
     } else if (args.type === "mr-docx" || args.type === "mr-docx-draft") {
       // mr-docx and mr-docx-draft → draft DOCX (clean = false)

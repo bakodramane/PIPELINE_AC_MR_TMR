@@ -92,11 +92,44 @@ const NON_CELL_KEYS = new Set([
   "raw_response",
 ]);
 
+/** One source reference as stored per cell in _cells.json (see tmr.ts). */
+interface CellSource {
+  table_id?: string;
+  row?: string;
+  column?: string;
+}
+
+/**
+ * Format a cell's sources into a compact, reviewer-readable reference for the
+ * draft export's "Source" column.
+ *
+ * Shows the source id(s) the value was extracted from (a table_id like
+ * "01-main-report-t003" or a page_id like "01-main-report-p0026").  Appends
+ * " (?)" when the source could not be verified on disk so reviewers can spot
+ * unverified provenance at a glance.  Returns "" when there is no source.
+ */
+function formatCellSource(cellObj: Record<string, unknown>): string {
+  const sources = Array.isArray(cellObj.sources)
+    ? (cellObj.sources as CellSource[])
+    : [];
+  const ids = sources
+    .map((s) => (s && typeof s.table_id === "string" ? s.table_id.trim() : ""))
+    .filter((id) => id.length > 0);
+  // De-duplicate while preserving order.
+  const unique = [...new Set(ids)];
+  let ref = unique.join(", ");
+  if (ref && cellObj.unverified_source === true) ref += " (?)";
+  return ref;
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
-export async function exportTmr(projectDir: string): Promise<string> {
+export async function exportTmr(
+  projectDir: string,
+  draft = false,
+): Promise<string> {
   // ── Read inputs ──────────────────────────────────────────────────────────
   const manifest = await readJson<Manifest>(path.join(projectDir, "manifest.json"));
   const wca = await readJson<WcaConcepts>(WCA_PATH);
@@ -136,7 +169,9 @@ export async function exportTmr(projectDir: string): Promise<string> {
     if (!spec) continue;
 
     const colKeys = Object.keys(spec.columns);
-    const numCols = colKeys.length + 1; // +1 for the row-label column A
+    // Draft mode emits a "Source" column after each value column for traceability.
+    const colsPerValue = draft ? 2 : 1;
+    const numCols = colKeys.length * colsPerValue + 1; // +1 for the row-label column A
     const subTableKey = `sub_table_${n}`;
 
     // ── Title row: T<n> — <title> ────────────────────────────────────────
@@ -158,10 +193,11 @@ export async function exportTmr(projectDir: string): Promise<string> {
     }
     rowIdx++;
 
-    // ── Column header row: Row | Col1 (unit) | … ─────────────────────────
+    // ── Column header row: Row | Col1 (unit) | [Col1 source] | … ─────────
     const colHeaderRow: CellValue[] = ["Row"];
     for (const col of colKeys) {
       colHeaderRow.push(`${col} (${spec.columns[col].unit})`);
+      if (draft) colHeaderRow.push(`${col} — source`);
     }
     wsData.push(colHeaderRow);
     for (let c = 0; c < numCols; c++) {
@@ -191,25 +227,33 @@ export async function exportTmr(projectDir: string): Promise<string> {
           const key = toCellKey(rowLabel, colKeys[ci]);
           if (NON_CELL_KEYS.has(key)) {
             dataRow.push(null);
+            if (draft) dataRow.push(null);
             continue;
           }
           const cellObj = entry[key];
           let val: CellValue = null;
+          let source = "";
           if (
             cellObj !== null &&
             typeof cellObj === "object" &&
             "value" in (cellObj as Record<string, unknown>)
           ) {
-            const raw = (cellObj as { value: number | string | null }).value;
+            const obj = cellObj as Record<string, unknown>;
+            const raw = obj.value as number | string | null;
             if (typeof raw === "number") {
               val = raw;
-              // Mark numeric cells for right-alignment
-              rightSet.add(XLSX.utils.encode_cell({ r: rowIdx, c: ci + 1 }));
+              // Mark numeric cells for right-alignment (value column position
+              // accounts for the interleaved source columns in draft mode).
+              rightSet.add(
+                XLSX.utils.encode_cell({ r: rowIdx, c: 1 + ci * colsPerValue }),
+              );
             } else if (typeof raw === "string") {
               val = raw; // missing-value code, "0", etc.
             }
+            source = formatCellSource(obj);
           }
           dataRow.push(val);
+          if (draft) dataRow.push(source || null);
         }
         wsData.push(dataRow);
         rowIdx++;
@@ -252,13 +296,18 @@ export async function exportTmr(projectDir: string): Promise<string> {
     };
   }
 
-  XLSX.utils.book_append_sheet(wb, ws, "TMR_Results");
+  XLSX.utils.book_append_sheet(wb, ws, draft ? "TMR_Draft" : "TMR_Results");
 
   // ── Write output file ─────────────────────────────────────────────────────
   const today = new Date().toISOString().slice(0, 10);
   const outputDir = path.join(projectDir, "exports");
   await mkdir(outputDir, { recursive: true });
-  const filename = `${manifest.country_iso3.toLowerCase()}-tmr-${today}.xlsx`;
+  // Clean export keeps the database-ready filename; the draft (with sources) is
+  // suffixed so reviewers never confuse it with the submission file.
+  const iso3 = manifest.country_iso3.toLowerCase();
+  const filename = draft
+    ? `${iso3}-tmr-draft-${today}.xlsx`
+    : `${iso3}-tmr-${today}.xlsx`;
   const outputPath = path.join(outputDir, filename);
 
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;

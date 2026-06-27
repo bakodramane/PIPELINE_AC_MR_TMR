@@ -693,7 +693,8 @@ const TmrReview: FC<TmrReviewProps> = ({
     done: number;
     total: number;
   } | null>(null);
-  const [exporting, setExporting] = useState(false);
+  // Which export is in flight ("tmr-draft" | "tmr"), or null when idle.
+  const [exportingType, setExportingType] = useState<string | null>(null);
   const [showCostConfirm, setShowCostConfirm] = useState(false);
   const [showResetAllConfirm, setShowResetAllConfirm] = useState(false);
   const [resettingAll, setResettingAll] = useState(false);
@@ -823,14 +824,14 @@ const TmrReview: FC<TmrReviewProps> = ({
     [projectDir],
   );
 
-  // ── Export XLSX ───────────────────────────────────────────────────────────
+  // ── Export XLSX (clean = values only; draft = adds Source columns) ─────────
 
-  async function handleExport() {
-    setExporting(true);
+  async function handleExport(exportType: "tmr" | "tmr-draft") {
+    setExportingType(exportType);
     try {
       const outputPath = await invoke<string>("export_project", {
         projectDir,
-        exportType: "tmr",
+        exportType,
       });
       // Show only the filename, not the full path
       const filename = outputPath.split(/[/\\]/).pop() ?? outputPath;
@@ -838,7 +839,7 @@ const TmrReview: FC<TmrReviewProps> = ({
     } catch (err) {
       onToast(`Export failed: ${String(err)}`, "error");
     } finally {
-      setExporting(false);
+      setExportingType(null);
     }
   }
 
@@ -1083,25 +1084,39 @@ const TmrReview: FC<TmrReviewProps> = ({
               </div>
             )}
           </div>
-          {/* Export XLSX — outline style to distinguish from the generate button */}
-          <button
-            onClick={() => void handleExport()}
-            disabled={exporting || generatingAll || generatingOne !== null}
-            className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
-              exporting || generatingAll || generatingOne !== null
-                ? "border-white/20 text-white/30 cursor-not-allowed"
-                : "border-white/40 text-white/80 hover:bg-white/10 hover:border-white/60"
-            }`}
-          >
-            {exporting ? (
-              <>
-                <div className="w-3 h-3 border border-white/40 border-t-transparent rounded-full animate-spin" />
-                Exporting…
-              </>
-            ) : (
-              <>↓ Export XLSX</>
-            )}
-          </button>
+          {/* Two export buttons: Draft XLSX (with sources) · Clean XLSX (values only) */}
+          {(["tmr-draft", "tmr"] as const).map((type) => {
+            const busy = exportingType === type;
+            const disabled =
+              exportingType !== null || generatingAll || generatingOne !== null;
+            const label = type === "tmr-draft" ? "↓ Draft XLSX" : "↓ Clean XLSX";
+            return (
+              <button
+                key={type}
+                onClick={() => void handleExport(type)}
+                disabled={disabled}
+                title={
+                  type === "tmr-draft"
+                    ? "Draft workbook with a Source column per value (for review)"
+                    : "Clean workbook with values only (ready for the TMR database)"
+                }
+                className={`flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+                  disabled
+                    ? "border-white/20 text-white/30 cursor-not-allowed"
+                    : "border-white/40 text-white/80 hover:bg-white/10 hover:border-white/60"
+                }`}
+              >
+                {busy ? (
+                  <>
+                    <div className="w-3 h-3 border border-white/40 border-t-transparent rounded-full animate-spin" />
+                    Exporting…
+                  </>
+                ) : (
+                  <>{label}</>
+                )}
+              </button>
+            );
+          })}
           {/* Reset all — outline/muted style so it reads as secondary */}
           <button
             onClick={() => setShowResetAllConfirm(true)}

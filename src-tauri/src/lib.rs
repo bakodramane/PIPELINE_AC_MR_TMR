@@ -161,6 +161,26 @@ fn find_node_scripts_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     // None → dev mode; caller falls back to tsx invocation.
 }
 
+/// Windows CREATE_NO_WINDOW flag — prevents a console window from flashing when
+/// a child process is spawned from this GUI app.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Build a `std::process::Command` that never flashes a console window on
+/// Windows.  Used for the short-lived probe commands (`where node`,
+/// `node --version`) that resolve Node — `tauri-plugin-shell` already applies
+/// CREATE_NO_WINDOW to the sidecar spawn, but these direct probes did not,
+/// which is what produced the brief black window on every generate/export.
+fn silent_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Locate the Node.js binary on the current machine.
 ///
 /// Checks well-known Windows install locations, then falls back to PATH.
@@ -199,7 +219,7 @@ fn find_node_binary() -> Option<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     let where_cmd = ("which", "node");
 
-    if let Ok(out) = std::process::Command::new(where_cmd.0)
+    if let Ok(out) = silent_command(where_cmd.0)
         .arg(where_cmd.1)
         .output()
     {
@@ -262,7 +282,7 @@ fn node_on_path() -> bool {
     #[cfg(not(target_os = "windows"))]
     let (cmd, arg) = ("which", "node");
 
-    std::process::Command::new(cmd)
+    silent_command(cmd)
         .arg(arg)
         .output()
         .map(|o| o.status.success())
@@ -341,6 +361,44 @@ fn append_diagnostics_log(project_dir: &str, label: &str, content: &str) {
     {
         let _ = file.write_all(block.as_bytes());
     }
+}
+
+/// Build a ready-to-spawn sidecar command shared by ALL four sidecar commands
+/// (ingest / generate MR / generate TMR / export).
+///
+/// This is the single funnel for: (a) AGCENSUS_RESOURCE_ROOT resolution +
+/// injection, (b) production-diagnostics assembly + logging, and (c) the spawn
+/// mechanism — `app.shell().command()`, which applies CREATE_NO_WINDOW.  Routing
+/// every command through here is what stops them drifting apart (the recurring
+/// "works in one command, fails in another on NSIS" class of bug).
+///
+/// `node_cmd` / `args` come from `resolve_invocation` (the shared node + scripts
+/// resolution).  Returns the configured `Command` (caller calls `.spawn()`) and
+/// the diagnostics block so the caller can append it to a "no output" error.
+fn prepare_sidecar(
+    app: &tauri::AppHandle,
+    log_project_dir: &str,
+    label: &str,
+    node_cmd: &str,
+    args: &[String],
+) -> (tauri_plugin_shell::process::Command, String) {
+    let resource_root =
+        find_node_scripts_dir(app).map(|d| d.to_string_lossy().into_owned());
+
+    let diagnostics = format!(
+        "{}\nresource_root : {resource_root:?}",
+        build_invocation_diagnostics(app, node_cmd, args)
+    );
+    append_diagnostics_log(log_project_dir, label, &diagnostics);
+    if cfg!(debug_assertions) {
+        eprintln!("[{label}] diagnostics:\n{diagnostics}");
+    }
+
+    let mut cmd = app.shell().command(node_cmd).args(args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    (cmd, diagnostics)
 }
 
 /// Resolve how to invoke a sidecar script: production bundle or dev tsx.
@@ -492,12 +550,6 @@ async fn generate_mr_sections(
 ) -> Result<String, String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "generate.ts")?;
 
-    // AGCENSUS_RESOURCE_ROOT is set in production so generator scripts can
-    // locate prompt templates and the WCA concept registry via env var
-    // instead of __dirname-relative paths (which change after bundling).
-    let resource_root: Option<String> = find_node_scripts_dir(&app)
-        .map(|d| d.to_string_lossy().into_owned());
-
     // Determine the provider and look up any stored API key.
     // Azure stores the key under "azure_api_key" to separate it from
     // the endpoint and deployment entries in the same store.
@@ -511,7 +563,7 @@ async fn generate_mr_sections(
 
     args.extend([
         "--project".to_string(),
-        project_dir,
+        project_dir.clone(),
         "--type".to_string(),
         "mr".to_string(),
         "--model".to_string(),
@@ -542,16 +594,18 @@ async fn generate_mr_sections(
         15
     };
 
-    let mut cmd = app.shell().command(&node_cmd).args(&args);
-    if let Some(root) = resource_root {
-        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
-    }
-    let (mut rx, _child) = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn node generator: {e}"))?;
+    let (cmd, diagnostics) =
+        prepare_sidecar(&app, &project_dir, "generate MR spawn", &node_cmd, &args);
+    let (mut rx, _child) = cmd.spawn().map_err(|e| {
+        let msg = format!("Failed to spawn node generator: {e}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "generate MR spawn FAILED", &msg);
+        msg
+    })?;
 
     let mut buf = String::new();
+    let mut stderr_buf = String::new();
     let mut done_count: u32 = 0;
+    let mut exit_code: Option<i32> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -596,12 +650,31 @@ async fn generate_mr_sections(
                     // STATUS: lines are informational — not forwarded as events
                 }
             }
-            CommandEvent::Stderr(_) => {
-                // Ignore stderr — generator errors surface via ERROR: stdout lines
+            CommandEvent::Stderr(bytes) => {
+                stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
             }
-            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+                break;
+            }
+            CommandEvent::Error(_) => break,
             _ => {}
         }
+    }
+
+    // Hard failure: the process produced no completion marker at all (e.g. the
+    // bundled script crashed immediately).  Surface it as an error with the
+    // resolved command diagnostics instead of a success-shaped "0/N processed".
+    if done_count == 0 {
+        let stderr_tail: String = stderr_buf.trim().chars().take(800).collect();
+        let detail = if stderr_tail.is_empty() {
+            format!("Generator exited without output (exit code: {exit_code:?})")
+        } else {
+            format!("{stderr_tail}\n\n(exit code: {exit_code:?})")
+        };
+        let msg = format!("{detail}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "generate MR produced no output", &msg);
+        return Err(msg);
     }
 
     Ok(format!("{done_count}/{total} sections processed"))
@@ -623,7 +696,6 @@ async fn generate_tmr_subtable(
     model: String,
 ) -> Result<String, String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "generate.ts")?;
-    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
 
     let provider = provider_for_model(&model);
     let key_store_name = if provider == "azure" { "azure_api_key" } else { provider };
@@ -634,7 +706,7 @@ async fn generate_tmr_subtable(
 
     args.extend([
         "--project".to_string(),
-        project_dir,
+        project_dir.clone(),
         "--type".to_string(),
         "tmr".to_string(),
         "--model".to_string(),
@@ -665,16 +737,18 @@ async fn generate_tmr_subtable(
         1
     };
 
-    let mut cmd = app.shell().command(&node_cmd).args(&args);
-    if let Some(root) = resource_root {
-        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
-    }
-    let (mut rx, _child) = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn node generator: {e}"))?;
+    let (cmd, diagnostics) =
+        prepare_sidecar(&app, &project_dir, "generate TMR spawn", &node_cmd, &args);
+    let (mut rx, _child) = cmd.spawn().map_err(|e| {
+        let msg = format!("Failed to spawn node generator: {e}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "generate TMR spawn FAILED", &msg);
+        msg
+    })?;
 
     let mut buf = String::new();
+    let mut stderr_buf = String::new();
     let mut done_count: u32 = 0;
+    let mut exit_code: Option<i32> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -717,10 +791,30 @@ async fn generate_tmr_subtable(
                     }
                 }
             }
-            CommandEvent::Stderr(_) => {}
-            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            CommandEvent::Stderr(bytes) => {
+                stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+                break;
+            }
+            CommandEvent::Error(_) => break,
             _ => {}
         }
+    }
+
+    // Hard failure: no completion marker at all — surface with diagnostics
+    // rather than a success-shaped "0/N processed".
+    if done_count == 0 {
+        let stderr_tail: String = stderr_buf.trim().chars().take(800).collect();
+        let detail = if stderr_tail.is_empty() {
+            format!("Generator exited without output (exit code: {exit_code:?})")
+        } else {
+            format!("{stderr_tail}\n\n(exit code: {exit_code:?})")
+        };
+        let msg = format!("{detail}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "generate TMR produced no output", &msg);
+        return Err(msg);
     }
 
     Ok(format!("{done_count}/{total} sub-tables processed"))
@@ -742,26 +836,26 @@ async fn export_project(
 ) -> Result<String, String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "export.mjs")?;
 
-    // AGCENSUS_RESOURCE_ROOT must be injected here exactly as in
-    // generate_mr_sections / generate_tmr_subtable / ingest_source so the
+    // AGCENSUS_RESOURCE_ROOT is injected by prepare_sidecar (identically to
+    // generate_mr_sections / generate_tmr_subtable / ingest_source) so the
     // bundled export script (which inlines export-tmr.ts) locates
     // concepts/wca-2020.json under <dist-scripts>/concepts/ instead of the
     // wrong __dirname-relative `../concepts` (= install root) path.
-    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+    args.extend(["--project".to_string(), project_dir.clone(), "--type".to_string(), export_type]);
 
-    args.extend(["--project".to_string(), project_dir, "--type".to_string(), export_type]);
-
-    let mut cmd = app.shell().command(&node_cmd).args(&args);
-    if let Some(root) = resource_root {
-        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
-    }
-    let (mut rx, _child) = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn export: {e}"))?;
+    let (cmd, diagnostics) =
+        prepare_sidecar(&app, &project_dir, "export spawn", &node_cmd, &args);
+    let (mut rx, _child) = cmd.spawn().map_err(|e| {
+        let msg = format!("Failed to spawn export: {e}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "export spawn FAILED", &msg);
+        msg
+    })?;
 
     let mut buf = String::new();
+    let mut stderr_buf = String::new();
     let mut output_path = String::new();
     let mut error_msg = String::new();
+    let mut exit_code: Option<i32> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -777,8 +871,14 @@ async fn export_project(
                     }
                 }
             }
-            CommandEvent::Stderr(_) => {}
-            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            CommandEvent::Stderr(bytes) => {
+                stderr_buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+                break;
+            }
+            CommandEvent::Error(_) => break,
             _ => {}
         }
     }
@@ -788,7 +888,17 @@ async fn export_project(
     } else if !output_path.is_empty() {
         Ok(output_path)
     } else {
-        Err("Export completed with no output path reported".to_string())
+        // No DONE:/ERROR: line — surface the real failure with diagnostics
+        // instead of the previous generic message.
+        let stderr_tail: String = stderr_buf.trim().chars().take(800).collect();
+        let detail = if stderr_tail.is_empty() {
+            format!("Export completed with no output path reported (exit code: {exit_code:?})")
+        } else {
+            format!("{stderr_tail}\n\n(exit code: {exit_code:?})")
+        };
+        let msg = format!("{detail}\n\n[diagnostics]\n{diagnostics}");
+        append_diagnostics_log(&project_dir, "export produced no output", &msg);
+        Err(msg)
     }
 }
 
@@ -1126,7 +1236,6 @@ async fn ingest_source(
     language: String,
 ) -> Result<(), String> {
     let (node_cmd, mut args) = resolve_invocation(&app, "ingest.mjs")?;
-    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
 
     args.extend([
         "--project".to_string(),
@@ -1139,21 +1248,11 @@ async fn ingest_source(
         language,
     ]);
 
-    // Production diagnostics: assemble the exact resolved command and write it
-    // to <base>/_diagnostics.log so a portable/installed test on a user machine
-    // is conclusive even when stderr is invisible.  Also kept on the dev path.
-    let diagnostics = build_invocation_diagnostics(&app, &node_cmd, &args);
-    let diagnostics = format!("{diagnostics}\nresource_root : {resource_root:?}");
-    append_diagnostics_log(&project_dir, "ingest spawn", &diagnostics);
-
-    if cfg!(debug_assertions) {
-        eprintln!("[ingest] diagnostics:\n{diagnostics}");
-    }
-
-    let mut cmd = app.shell().command(&node_cmd).args(&args);
-    if let Some(root) = resource_root {
-        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
-    }
+    // Resolve resource root, assemble + log production diagnostics, and build the
+    // no-window command — shared with generate/export via prepare_sidecar so the
+    // four sidecars cannot drift apart in the installed/portable layouts.
+    let (cmd, diagnostics) =
+        prepare_sidecar(&app, &project_dir, "ingest spawn", &node_cmd, &args);
     let (mut rx, _child) = cmd.spawn().map_err(|e| {
         let msg = format!("Failed to spawn ingest process: {e}\n\n[diagnostics]\n{diagnostics}");
         append_diagnostics_log(&project_dir, "ingest spawn FAILED", &msg);
@@ -1314,7 +1413,7 @@ fn check_node_available() -> Result<String, String> {
          Please install Node.js (LTS) from nodejs.org, then restart this application."
             .to_string()
     })?;
-    let out = std::process::Command::new(&node)
+    let out = silent_command(&node)
         .arg("--version")
         .output()
         .map_err(|e| e.to_string())?;
