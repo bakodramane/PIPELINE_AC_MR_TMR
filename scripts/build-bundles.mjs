@@ -123,6 +123,12 @@ copyFile(
   path.join(OUT, 'concepts', 'wca-2020.json'),
 );
 
+// WCA 2020 essential items registry (read by essential-items.ts at runtime)
+copyFile(
+  path.join(ROOT, 'src', 'concepts', 'wca-essential-items.json'),
+  path.join(OUT, 'concepts', 'wca-essential-items.json'),
+);
+
 console.log('Data files copied to dist-scripts/');
 
 // ---------------------------------------------------------------------------

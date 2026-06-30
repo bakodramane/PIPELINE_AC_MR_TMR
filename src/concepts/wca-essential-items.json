@@ -1,0 +1,163 @@
+[
+  {
+    "code": "0101",
+    "name": "Identification and location of agricultural holding",
+    "theme": "01 — Identification and general characteristics of the holding",
+    "short_description": "The holding is identified by a unique number and its geographic location is recorded by administrative unit and/or GPS coordinates.",
+    "is_new": false
+  },
+  {
+    "code": "0103",
+    "name": "Legal status of agricultural holder (type of holder)",
+    "theme": "01 — Identification and general characteristics of the holding",
+    "short_description": "Classifies the holder as a civil person, group of civil persons, or juridical person following the WCA 2020 framework.",
+    "is_new": false
+  },
+  {
+    "code": "0104",
+    "name": "Sex of agricultural holder",
+    "theme": "01 — Identification and general characteristics of the holding",
+    "short_description": "Records whether the agricultural holder is male or female.",
+    "is_new": false
+  },
+  {
+    "code": "0105",
+    "name": "Age of agricultural holder",
+    "theme": "01 — Identification and general characteristics of the holding",
+    "short_description": "Records the age of the agricultural holder in completed years at the time of the census.",
+    "is_new": false
+  },
+  {
+    "code": "0107",
+    "name": "Main purpose of production of the holding",
+    "theme": "01 — Identification and general characteristics of the holding",
+    "short_description": "Identifies whether the holding produces primarily for sale (commercial), for household consumption (subsistence), or both.",
+    "is_new": false
+  },
+  {
+    "code": "0108",
+    "name": "Other economic activities of the household",
+    "theme": "01 — Identification and general characteristics of the holding",
+    "short_description": "Records any non-agricultural income-generating activities carried out by the holder's household during the reference year.",
+    "is_new": false
+  },
+  {
+    "code": "0201",
+    "name": "Total area of holding",
+    "theme": "02 — Land",
+    "short_description": "The total area of all land under the management of the holding, expressed in hectares, regardless of land use.",
+    "is_new": false
+  },
+  {
+    "code": "0202",
+    "name": "Area of holding according to land use types",
+    "theme": "02 — Land",
+    "short_description": "The holding's total area disaggregated by land use type, including temporary crops, permanent crops, pastures, and other.",
+    "is_new": false
+  },
+  {
+    "code": "0203",
+    "name": "Area of holding according to land tenure types",
+    "theme": "02 — Land",
+    "short_description": "The holding's total area disaggregated by land tenure category, such as owner-operated, rented in, or other arrangements.",
+    "is_new": true
+  },
+  {
+    "code": "0302",
+    "name": "Area of land actually irrigated: fully and partially controlled irrigation",
+    "theme": "03 — Irrigation",
+    "short_description": "The area of land on which crops were actually irrigated during the reference year, covering both fully and partially controlled irrigation systems.",
+    "is_new": true
+  },
+  {
+    "code": "0402",
+    "name": "Area of temporary crops harvested (for each temporary crop type)",
+    "theme": "04 — Crops",
+    "short_description": "The area on which each type of temporary crop was harvested at least once during the agricultural year.",
+    "is_new": false
+  },
+  {
+    "code": "0406",
+    "name": "Area of productive and non-productive permanent crops in compact plantations (for each permanent crop type)",
+    "theme": "04 — Crops",
+    "short_description": "The area of land under each type of permanent crop in compact plantations, distinguishing productive from non-productive.",
+    "is_new": false
+  },
+  {
+    "code": "0407",
+    "name": "Number of permanent crop trees in scattered plantings (for each tree crop)",
+    "theme": "04 — Crops",
+    "short_description": "The number of permanent crop trees grown in scattered rather than compact plantation form, recorded by crop type.",
+    "is_new": false
+  },
+  {
+    "code": "0411",
+    "name": "Use of each type of fertilizer",
+    "theme": "04 — Crops",
+    "short_description": "Records whether mineral or organic fertilizers, or both, were applied to the holding during the reference year, by type.",
+    "is_new": false
+  },
+  {
+    "code": "0501",
+    "name": "Type of livestock system",
+    "theme": "05 — Livestock",
+    "short_description": "Classifies the livestock production system of the holding such as sedentary, transhumant, nomadic, or mixed.",
+    "is_new": false
+  },
+  {
+    "code": "0502",
+    "name": "Number of animals",
+    "theme": "05 — Livestock",
+    "short_description": "The total count of each livestock type held by the holding on the census reference date.",
+    "is_new": false
+  },
+  {
+    "code": "0503",
+    "name": "Number of female breeding animals",
+    "theme": "05 — Livestock",
+    "short_description": "The number of female animals of reproductive age kept on the holding, disaggregated by species.",
+    "is_new": true
+  },
+  {
+    "code": "0601",
+    "name": "Use of agricultural pesticides",
+    "theme": "06 — Agricultural inputs",
+    "short_description": "Records whether agricultural pesticides (insecticides, herbicides, fungicides, etc.) were used on the holding during the reference year.",
+    "is_new": false
+  },
+  {
+    "code": "0801",
+    "name": "Household size by sex and age groups",
+    "theme": "08 — Demography of agricultural holders and households",
+    "short_description": "The total number of persons in the agricultural holder's household, disaggregated by sex and broad age group.",
+    "is_new": false
+  },
+  {
+    "code": "0901",
+    "name": "Whether working on the holding is the main activity",
+    "theme": "09 — Labour",
+    "short_description": "Records whether each household member's principal economic activity during the reference year was working on the holding.",
+    "is_new": true
+  },
+  {
+    "code": "0902",
+    "name": "Working time on the holding",
+    "theme": "09 — Labour",
+    "short_description": "The time spent working on the holding during the reference year, expressed in days or hours, by household member.",
+    "is_new": false
+  },
+  {
+    "code": "0903",
+    "name": "Number and working time of employees on the holding by sex",
+    "theme": "09 — Labour",
+    "short_description": "The number of paid employees and the total working time they contributed to the holding during the reference year, by sex.",
+    "is_new": false
+  },
+  {
+    "code": "1201",
+    "name": "Presence of aquaculture on the holding",
+    "theme": "12 — Aquaculture",
+    "short_description": "Records whether aquaculture activities (fish or other aquatic organism farming) are carried out on or associated with the holding.",
+    "is_new": false
+  }
+]

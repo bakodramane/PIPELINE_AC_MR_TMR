@@ -10,7 +10,7 @@
  * export async function exportMrDocx(projectDir: string): Promise<string>
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import path from "node:path";
 import {
   AlignmentType,
@@ -63,6 +63,12 @@ function hRule(): Paragraph {
  *                    When false (default), the same content is included but the
  *                    filename carries a `-draft` suffix to flag it as internal.
  */
+interface EiSummary {
+  collected: number;
+  partial: number;
+  total_assessed: number;
+}
+
 export async function exportMrDocx(projectDir: string, clean = false): Promise<string> {
   const manifest = await readJson<Manifest>(
     path.join(projectDir, "manifest.json"),
@@ -75,6 +81,19 @@ export async function exportMrDocx(projectDir: string, clean = false): Promise<s
     );
   } catch {
     // _claims.json absent — all sections show "not available" boilerplate
+  }
+
+  // Read essential items summary if available — injected after §5
+  let eiSummary: EiSummary | null = null;
+  try {
+    const assessmentPath = path.join(projectDir, "drafts", "essential-items", "_assessment.json");
+    await access(assessmentPath);
+    const assessment = await readJson<{ summary?: EiSummary }>(assessmentPath);
+    if (assessment.summary && typeof assessment.summary.collected === "number") {
+      eiSummary = assessment.summary;
+    }
+  } catch {
+    // Assessment absent or incomplete — skip injection
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -185,6 +204,20 @@ export async function exportMrDocx(projectDir: string, clean = false): Promise<s
           );
         }
       }
+    }
+
+    // After §5 (census coverage topics): inject EI count sentence if assessment exists
+    if (n === 5 && eiSummary) {
+      const partialNote = eiSummary.partial > 0 ? ` (${eiSummary.partial} partially)` : "";
+      const eiText =
+        `The census questionnaire collected ${eiSummary.collected} of the 23 ` +
+        `WCA 2020 essential items${partialNote}.`;
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: eiText, italics: true })],
+          spacing: { before: 80, after: 80 },
+        }),
+      );
     }
 
     // Thin rule between sections (not after the last)

@@ -1,19 +1,19 @@
 /**
- * AgCensus Compiler — export CLI wrapper.
+ * AgCensus Compiler â€” export CLI wrapper.
  *
  * Invoked by the Tauri backend via tsx so TypeScript imports resolve:
  *   node <tsx-cli.mjs> export.mjs --project <dir> --type tmr|mr
  *
  * Arguments:
  *   --project  Absolute path to the country project directory
- *   --type     "tmr"  → writes exports/<iso3>-tmr-<date>.xlsx
- *              "mr"   → writes exports/<iso3>-mr-<date>.md
+ *   --type     "tmr"  â†’ writes exports/<iso3>-tmr-<date>.xlsx
+ *              "mr"   â†’ writes exports/<iso3>-mr-<date>.md
  *
  * Stdout protocol (exactly one line, then process exits 0):
  *   DONE:<absolute-output-path>   export succeeded
  *   ERROR:<message>               export failed
  *
- * Always exits with code 0 — errors are communicated via stdout.
+ * Always exits with code 0 â€” errors are communicated via stdout.
  */
 
 // Provide a real CommonJS require() for xlsx bundled into this file.
@@ -58,7 +58,7 @@ async function loadDotEnv() {
       }
     }
   } catch {
-    // .env absent or unreadable — rely on process.env
+    // .env absent or unreadable â€” rely on process.env
   }
 }
 
@@ -96,15 +96,25 @@ async function main() {
       writeLine("ERROR:Missing required --project argument");
       return;
     }
-    const VALID_TYPES = ["tmr", "tmr-draft", "mr", "mr-draft", "mr-docx", "mr-docx-draft", "mr-clean", "mr-docx-clean"];
+    const VALID_TYPES = ["tmr", "tmr-draft", "mr", "mr-draft", "mr-docx", "mr-docx-draft", "mr-clean", "mr-docx-clean", "essential-items"];
     if (!VALID_TYPES.includes(args.type)) {
-      writeLine(`ERROR:Missing or invalid --type argument — must be one of: ${VALID_TYPES.join(", ")}`);
+      writeLine(`ERROR:Missing or invalid --type argument - must be one of: ${VALID_TYPES.join(", ")}`);
       return;
     }
 
-    if (args.type === "tmr" || args.type === "tmr-draft") {
-      // tmr        → clean XLSX (values only, database-ready)
-      // tmr-draft  → draft XLSX (adds a Source column per value, for review)
+    if (args.type === "essential-items") {
+      let mod;
+      try {
+        mod = await import("../../src/generators/export-essential-items.ts");
+      } catch (err) {
+        writeLine(`ERROR:Cannot load essential-items export module: ${sanitise(String(err))}`);
+        return;
+      }
+      const outputPath = await mod.exportEssentialItems(args.project);
+      writeLine(`DONE:${outputPath}`);
+    } else if (args.type === "tmr" || args.type === "tmr-draft") {
+      // tmr        clean XLSX (values only, database-ready)
+      // tmr-draft  draft XLSX (adds a Source column per value, for review)
       let mod;
       try {
         // tsx registers a loader that resolves .ts extensions in dynamic imports
@@ -116,7 +126,7 @@ async function main() {
       const outputPath = await mod.exportTmr(args.project, args.type === "tmr-draft");
       writeLine(`DONE:${outputPath}`);
     } else if (args.type === "mr-docx" || args.type === "mr-docx-draft") {
-      // mr-docx and mr-docx-draft → draft DOCX (clean = false)
+      // mr-docx and mr-docx-draft â†’ draft DOCX (clean = false)
       let mod;
       try {
         mod = await import("../../src/generators/export-mr-docx.ts");
@@ -127,7 +137,7 @@ async function main() {
       const outputPath = await mod.exportMrDocx(args.project, false);
       writeLine(`DONE:${outputPath}`);
     } else if (args.type === "mr-docx-clean") {
-      // mr-docx-clean → approved-only DOCX (clean = true)
+      // mr-docx-clean â†’ approved-only DOCX (clean = true)
       let mod;
       try {
         mod = await import("../../src/generators/export-mr-docx.ts");
@@ -138,7 +148,7 @@ async function main() {
       const outputPath = await mod.exportMrDocx(args.project, true);
       writeLine(`DONE:${outputPath}`);
     } else if (args.type === "mr-clean") {
-      // mr-clean → approved-only Markdown (clean = true)
+      // mr-clean â†’ approved-only Markdown (clean = true)
       let mod;
       try {
         mod = await import("../../src/generators/export-mr.ts");
@@ -149,7 +159,7 @@ async function main() {
       const outputPath = await mod.exportMr(args.project, true);
       writeLine(`DONE:${outputPath}`);
     } else {
-      // mr and mr-draft → draft Markdown (clean = false)
+      // mr and mr-draft â†’ draft Markdown (clean = false)
       let mod;
       try {
         mod = await import("../../src/generators/export-mr.ts");

@@ -25,6 +25,7 @@ import ProjectOverview from "./screens/ProjectOverview";
 import MrReview from "./screens/MrReview";
 import TmrReview from "./screens/TmrReview";
 import AuditLog from "./screens/AuditLog";
+import EssentialItemsReview from "./screens/EssentialItemsReview";
 import Settings from "./screens/Settings";
 import type { ProjectInfo, ToastMessage } from "./types/ui";
 
@@ -37,7 +38,8 @@ type NonSettingsScreen =
   | { id: "project-overview"; project: ProjectInfo }
   | { id: "mr-review"; project: ProjectInfo }
   | { id: "tmr-review"; project: ProjectInfo }
-  | { id: "audit-log"; project: ProjectInfo };
+  | { id: "audit-log"; project: ProjectInfo }
+  | { id: "essential-items"; project: ProjectInfo };
 
 type Screen = NonSettingsScreen | { id: "settings" };
 
@@ -252,6 +254,9 @@ export default function App() {
             onOpenAuditLog={() =>
               setScreen({ id: "audit-log", project: screen.project })
             }
+            onOpenEssentialItems={() =>
+              setScreen({ id: "essential-items", project: screen.project })
+            }
             onToast={addToast}
           />
         );
@@ -292,6 +297,21 @@ export default function App() {
             projectDir={screen.project.dir}
             projectName={`${screen.project.manifest.country} ${screen.project.manifest.reference_year}`}
             onBack={() =>
+              setScreen({ id: "project-overview", project: screen.project })
+            }
+            onToast={addToast}
+          />
+        );
+
+      case "essential-items":
+        return (
+          <EssentialItemsReview
+            projectDir={screen.project.dir}
+            projectName={`${screen.project.manifest.country} ${screen.project.manifest.reference_year}`}
+            onBack={() =>
+              setScreen({ id: "project-overview", project: screen.project })
+            }
+            onOpenSources={() =>
               setScreen({ id: "project-overview", project: screen.project })
             }
             onToast={addToast}

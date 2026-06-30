@@ -35,6 +35,7 @@ interface ProjectOverviewProps {
   onOpenMrReview: () => void;
   onOpenTmrReview: () => void;
   onOpenAuditLog: () => void;
+  onOpenEssentialItems: () => void;
   onToast: (msg: string, type: ToastMessage["type"]) => void;
 }
 
@@ -811,6 +812,7 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
   onOpenMrReview,
   onOpenTmrReview,
   onOpenAuditLog,
+  onOpenEssentialItems,
   onToast,
 }) => {
   const [mrGenerating, setMrGenerating] = useState(false);
@@ -1038,6 +1040,7 @@ const ProjectOverview: FC<ProjectOverviewProps> = ({
             </button>
             <NavTab label="MR draft" onClick={onOpenMrReview} />
             <NavTab label="TMR draft" onClick={onOpenTmrReview} />
+            <NavTab label="Essential Items" onClick={onOpenEssentialItems} />
             <NavTab
               label="Issues"
               onClick={() =>

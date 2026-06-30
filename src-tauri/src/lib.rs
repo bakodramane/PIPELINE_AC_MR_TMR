@@ -1209,6 +1209,174 @@ fn reset_all_tmr(project_dir: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Essential items assessment command
+// ---------------------------------------------------------------------------
+
+/// Assess WCA 2020 essential items coverage for one country project.
+///
+/// `item_code == None`      → assess all 23 items sequentially
+/// `item_code == Some(code)` → assess that item only (4-digit WCA code)
+#[tauri::command]
+async fn assess_essential_items(
+    app: tauri::AppHandle,
+    project_dir: String,
+    model: String,
+    item_code: Option<String>,
+) -> Result<String, String> {
+    let (node_cmd, mut args) = resolve_invocation(&app, "generate.ts")?;
+    let resource_root = find_node_scripts_dir(&app).map(|d| d.to_string_lossy().into_owned());
+
+    let provider = provider_for_model(&model);
+    let key_store_name = if provider == "azure" { "azure_api_key" } else { provider };
+    let api_key = read_api_key_from_store(&app, key_store_name);
+
+    let azure_endpoint   = if provider == "azure" { read_api_key_from_store(&app, "azure_endpoint")   } else { None };
+    let azure_deployment = if provider == "azure" { read_api_key_from_store(&app, "azure_deployment") } else { None };
+
+    args.extend([
+        "--project".to_string(),
+        project_dir,
+        "--type".to_string(),
+        "essential-items".to_string(),
+        "--model".to_string(),
+        model,
+        "--provider".to_string(),
+        provider.to_string(),
+    ]);
+
+    if let Some(ref key) = api_key {
+        args.extend(["--api-key".to_string(), key.clone()]);
+    }
+    if let Some(ref ep) = azure_endpoint {
+        args.extend(["--azure-endpoint".to_string(), ep.clone()]);
+    }
+    if let Some(ref dep) = azure_deployment {
+        args.extend(["--azure-deployment".to_string(), dep.clone()]);
+    }
+
+    let total: u32 = if let Some(ref code) = item_code {
+        args.extend(["--item".to_string(), code.clone()]);
+        1
+    } else {
+        args.push("--all".to_string());
+        23
+    };
+
+    let mut cmd = app.shell().command(&node_cmd).args(&args);
+    if let Some(root) = resource_root {
+        cmd = cmd.env("AGCENSUS_RESOURCE_ROOT", root);
+    }
+    let (mut rx, _child) = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn node generator: {e}"))?;
+
+    let mut buf = String::new();
+    let mut done_count: u32 = 0;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim_end_matches('\r').to_string();
+                    buf = buf[pos + 1..].to_string();
+
+                    if let Some(rest) = line.strip_prefix("DONE:") {
+                        if let Ok(n) = rest.trim().parse::<u32>() {
+                            done_count += 1;
+                            let _ = app.emit(
+                                "generation-progress",
+                                GenerationProgressPayload {
+                                    gen_type: "essential-items".to_string(),
+                                    number: n,
+                                    status: "done".to_string(),
+                                    message: None,
+                                },
+                            );
+                        }
+                    } else if let Some(rest) = line.strip_prefix("ERROR:") {
+                        let mut parts = rest.splitn(2, ':');
+                        let n = parts
+                            .next()
+                            .and_then(|s| s.trim().parse::<u32>().ok())
+                            .unwrap_or(0);
+                        let msg = parts.next().unwrap_or("unknown error").to_string();
+                        done_count += 1;
+                        let _ = app.emit(
+                            "generation-progress",
+                            GenerationProgressPayload {
+                                gen_type: "essential-items".to_string(),
+                                number: n,
+                                status: "error".to_string(),
+                                message: Some(msg),
+                            },
+                        );
+                    }
+                }
+            }
+            CommandEvent::Stderr(_) => {}
+            CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
+            _ => {}
+        }
+    }
+
+    Ok(format!("{done_count}/{total} essential items processed"))
+}
+
+// ---------------------------------------------------------------------------
+// Reset essential items command
+// ---------------------------------------------------------------------------
+
+/// Remove one or all essential-items assessments from `_assessment.json`.
+///
+/// `item_code == None`      → reset all (write empty `{"items":{},"summary":{}}`)
+/// `item_code == Some(code)` → remove just that item, clear summary
+#[tauri::command]
+fn reset_essential_items(project_dir: String, item_code: Option<String>) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    let assessment_path = Path::new(&project_dir)
+        .join("drafts")
+        .join("essential-items")
+        .join("_assessment.json");
+
+    match item_code {
+        None => {
+            if let Some(parent) = assessment_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create directory: {e}"))?;
+            }
+            fs::write(&assessment_path, br#"{"items":{},"summary":{}}"#)
+                .map_err(|e| format!("Failed to write _assessment.json: {e}"))?;
+            append_audit_reset(&project_dir, "essential-items", "all");
+        }
+        Some(ref code) => {
+            if !assessment_path.exists() {
+                return Ok(());
+            }
+            let raw = fs::read_to_string(&assessment_path)
+                .map_err(|e| format!("Failed to read _assessment.json: {e}"))?;
+            let mut assessment: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("Failed to parse _assessment.json: {e}"))?;
+            if let Some(items) = assessment.get_mut("items").and_then(|v| v.as_object_mut()) {
+                items.remove(code.as_str());
+            }
+            if let Some(obj) = assessment.as_object_mut() {
+                obj.insert("summary".to_string(), serde_json::json!({}));
+            }
+            let updated = serde_json::to_string_pretty(&assessment)
+                .map_err(|e| format!("Failed to serialize _assessment.json: {e}"))?;
+            fs::write(&assessment_path, updated.as_bytes())
+                .map_err(|e| format!("Failed to write _assessment.json: {e}"))?;
+            append_audit_reset(&project_dir, "essential-items", code.as_str());
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Open path command
 // ---------------------------------------------------------------------------
 
@@ -1487,6 +1655,7 @@ fn create_project(project_dir: String, manifest: String) -> Result<String, Strin
         "evidence/tables",
         "drafts/mr",
         "drafts/tmr",
+        "drafts/essential-items",
         "sources",
         "audit",
     ] {
@@ -1852,6 +2021,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             generate_mr_sections,
             generate_tmr_subtable,
+            assess_essential_items,
             ensure_base_dir,
             create_project,
             export_project,
@@ -1863,6 +2033,7 @@ pub fn run() {
             reset_tmr_subtable,
             reset_all_mr,
             reset_all_tmr,
+            reset_essential_items,
             open_path,
             save_api_key,
             get_api_key,

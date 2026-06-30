@@ -299,7 +299,7 @@ export interface EvidenceIndexedEvent extends BaseAuditEvent {
 
 export interface GenerationStartedEvent extends BaseAuditEvent {
   type: "generation_started";
-  target: "mr" | "tmr";
+  target: "mr" | "tmr" | "essential-items";
   section_or_table: string;
   prompt_version: string;
   model: string;
@@ -308,7 +308,7 @@ export interface GenerationStartedEvent extends BaseAuditEvent {
 
 export interface GenerationCompletedEvent extends BaseAuditEvent {
   type: "generation_completed";
-  target: "mr" | "tmr";
+  target: "mr" | "tmr" | "essential-items";
   section_or_table: string;
   prompt_version: string;
   model: string;

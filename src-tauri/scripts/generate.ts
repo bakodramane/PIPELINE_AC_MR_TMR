@@ -88,9 +88,10 @@ async function loadDotEnv(): Promise<void> {
 
 interface ParsedArgs {
   project?: string;
-  type?: "mr" | "tmr";
+  type?: "mr" | "tmr" | "essential-items";
   section?: number;
   subtable?: number;
+  item?: string;
   all: boolean;
   model: Model;
   provider?: string;
@@ -124,6 +125,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--subtable":
         result.subtable = parseInt(argv[++i], 10);
+        break;
+      case "--item":
+        result.item = argv[++i];
         break;
       case "--all":
         result.all = true;
@@ -200,11 +204,46 @@ async function main(): Promise<void> {
       return;
     }
     if (!args.type) {
-      writeLine("ERROR:0:Missing required --type argument (mr | tmr)");
+      writeLine("ERROR:0:Missing required --type argument (mr | tmr | essential-items)");
       return;
     }
 
-    if (args.type === "mr") {
+    if (args.type === "essential-items") {
+      // ── Essential items assessment ─────────────────────────────────────────
+      let eiMod: {
+        assessEssentialItems: (
+          dir: string,
+          model: Model,
+          itemCode: string | null,
+          onProgress?: (index: number, code: string, ok: boolean, errorMsg?: string) => void,
+        ) => Promise<void>;
+      };
+      try {
+        eiMod = await import("../../src/generators/essential-items");
+      } catch (err) {
+        writeLine(`ERROR:0:Cannot load essential-items generator: ${sanitise(String(err))}`);
+        return;
+      }
+      const { assessEssentialItems } = eiMod;
+      const itemCode = args.item ?? null;
+      writeLine(`STATUS:Assessing WCA 2020 essential items coverage${itemCode ? ` (item ${itemCode})` : ""}…`);
+      try {
+        await assessEssentialItems(
+          args.project,
+          args.model,
+          itemCode,
+          (index, code, ok, errorMsg) => {
+            if (ok) {
+              writeLine(`DONE:${index}`);
+            } else {
+              writeLine(`ERROR:${index}:${sanitise(errorMsg ?? `Assessment failed for ${code}`)}`);
+            }
+          },
+        );
+      } catch (err) {
+        writeLine(`ERROR:0:${sanitise(String(err))}`);
+      }
+    } else if (args.type === "mr") {
       // ── MR sections ─────────────────────────────────────────────────────
       let mrMod: { generateSection: (dir: string, n: number, model: Model) => Promise<void> };
       try {
@@ -236,7 +275,7 @@ async function main(): Promise<void> {
           writeLine(`ERROR:${n}:${sanitise(String(err))}`);
         }
       }
-    } else {
+    } else if (args.type === "tmr") {
       // ── TMR sub-tables ───────────────────────────────────────────────────
       let tmrMod: { generateSubTable: (dir: string, n: number, model: Model) => Promise<void> };
       try {
